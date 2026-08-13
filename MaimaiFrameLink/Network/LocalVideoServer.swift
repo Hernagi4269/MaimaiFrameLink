@@ -9,7 +9,7 @@ final class LocalVideoServer: ObservableObject {
     private var shouldRun = false
     private let queue = DispatchQueue(label: "MaimaiFrameLink.http")
     var startRecordingHandler: (() -> Bool)?
-    var stopRecordingHandler: (((VideoInfo?) -> Void) -> Void)?
+    var stopRecordingHandler: ((@escaping (VideoInfo?) -> Void) -> Void)?
     var recordingStateHandler: (() -> Bool)?
 
     func start() {

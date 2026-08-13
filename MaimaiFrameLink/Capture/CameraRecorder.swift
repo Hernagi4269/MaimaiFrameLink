@@ -432,7 +432,13 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         applyRotationToMovieOutput()
     }
 
-    func toggleRecording() { isRecording ? stopRecording() : startRecording() }
+    func toggleRecording() {
+        if isRecording {
+            stopRecording()
+        } else {
+            _ = startRecording()
+        }
+    }
 
     @discardableResult
     func startRecording() -> Bool {
