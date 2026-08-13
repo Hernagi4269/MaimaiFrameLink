@@ -10,7 +10,7 @@ final class LocalVideoServer: ObservableObject {
         guard listener == nil else { return }
         do {
             let l = try NWListener(using: .tcp, on: .any)
-            l.service = NWListener.Service(name: Host.current().localizedName ?? "MaimaiCamera", type: "_maimailens._tcp")
+            l.service = NWListener.Service(name: "MaimaiCamera", type: "_maimailens._tcp")
             l.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async {
                     switch state {

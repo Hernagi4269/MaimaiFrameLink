@@ -1,7 +1,7 @@
 import AVFoundation
 import UIKit
 
-final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecordingDelegate {
+final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
     @Published private(set) var isRecording = false
     @Published private(set) var status = "準備中"
     @Published private(set) var is60FPS = false

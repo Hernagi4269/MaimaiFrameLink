@@ -14,16 +14,19 @@ final class RemoteVideoViewModel: ObservableObject {
     private var timer: Timer?
     private var periodicToken: Any?
 
-    deinit {
-        timer?.invalidate()
-        if let token = periodicToken { player.removeTimeObserver(token) }
-    }
-
     func connect(baseURL: URL?) {
         guard self.baseURL != baseURL else { return }
         self.baseURL = baseURL
         timer?.invalidate()
-        guard baseURL != nil else { status = "撮影側を検索中…"; return }
+        if baseURL == nil {
+            if let token = periodicToken {
+                player.removeTimeObserver(token)
+                periodicToken = nil
+            }
+            player.pause()
+            status = "撮影側を検索中…"
+            return
+        }
         refreshLatest(forceLoad: true)
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshLatest(forceLoad: false) }

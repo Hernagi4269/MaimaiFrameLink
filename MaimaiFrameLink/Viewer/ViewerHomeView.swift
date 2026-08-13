@@ -51,7 +51,10 @@ struct ViewerHomeView: View {
             .padding([.horizontal, .bottom])
         }
         .onAppear { discovery.start() }
-        .onDisappear { discovery.stop() }
+        .onDisappear {
+            discovery.stop()
+            vm.connect(baseURL: nil)
+        }
         .onChange(of: discovery.baseURL) { _, newValue in vm.connect(baseURL: newValue) }
     }
 
