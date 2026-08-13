@@ -31,7 +31,6 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     private func configureSession(includeAudio: Bool) {
         session.beginConfiguration()
         session.sessionPreset = .inputPriority
-        defer { session.commitConfiguration() }
 
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let cameraInput = try? AVCaptureDeviceInput(device: camera),
@@ -81,8 +80,14 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             }
         }
 
+        // AVCaptureSession must not be started while a configuration transaction is open.
+        session.commitConfiguration()
         session.startRunning()
-        DispatchQueue.main.async { self.status = self.is60FPS ? "1080p / 60fps" : "撮影可能（60fps非確認）" }
+
+        let configuredFor60FPS = is60FPS
+        DispatchQueue.main.async {
+            self.status = configuredFor60FPS ? "1080p / 60fps" : "撮影可能（60fps非確認）"
+        }
     }
 
     func toggleRecording() {
