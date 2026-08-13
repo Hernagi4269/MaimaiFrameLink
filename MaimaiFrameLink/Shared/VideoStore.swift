@@ -44,9 +44,21 @@ final class VideoStore {
         return fm.fileExists(atPath: url.path) ? url : nil
     }
 
+    @discardableResult
+    func delete(fileName: String) -> Bool {
+        guard let url = url(for: fileName) else { return false }
+        do {
+            try fm.removeItem(at: url)
+            return true
+        } catch {
+            print("VideoStore delete failed: \(error)")
+            return false
+        }
+    }
+
     func deleteAll() {
         for item in list() {
-            if let url = url(for: item.fileName) { try? fm.removeItem(at: url) }
+            _ = delete(fileName: item.fileName)
         }
     }
 }

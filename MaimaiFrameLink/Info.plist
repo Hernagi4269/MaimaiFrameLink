@@ -7,11 +7,12 @@
 <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
 <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.2.0</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleShortVersionString</key><string>0.3.0</string>
+<key>CFBundleVersion</key><string>4</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>NSCameraUsageDescription</key><string>maimaiのプレイ動画を60fpsで撮影するためにカメラを使用します。</string>
 <key>NSMicrophoneUsageDescription</key><string>プレイ動画の音声を録音するためにマイクを使用します。</string>
+<key>NSPhotoLibraryAddUsageDescription</key><string>確認中の動画を必要なときだけメインiPhoneの写真に保存するために使用します。</string>
 <key>NSLocalNetworkUsageDescription</key><string>撮影側iPhoneの動画を確認側iPhoneから直接再生するためにローカルネットワークを使用します。</string>
 <key>NSBonjourServices</key><array><string>_maimailens._tcp</string></array>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>

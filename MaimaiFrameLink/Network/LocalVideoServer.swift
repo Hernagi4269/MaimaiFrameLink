@@ -149,6 +149,15 @@ final class LocalVideoServer: ObservableObject {
             sendJSON(connection, code: 200, data: data)
             return
         }
+        if method == "DELETE", path.hasPrefix("/api/videos/") {
+            let name = String(path.dropFirst("/api/videos/".count))
+            if VideoStore.shared.delete(fileName: name) {
+                sendJSON(connection, code: 200, data: Data("{\"ok\":true}".utf8))
+            } else {
+                sendJSON(connection, code: 404, data: Data("{\"ok\":false}".utf8))
+            }
+            return
+        }
         if path.hasPrefix("/videos/") {
             let name = String(path.dropFirst("/videos/".count))
             guard let url = VideoStore.shared.url(for: name) else { sendText(connection, code: 404, text: "Not Found"); return }
