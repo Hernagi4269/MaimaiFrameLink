@@ -32,6 +32,13 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         session.beginConfiguration()
         session.sessionPreset = .inputPriority
 
+        var configurationCommitted = false
+        defer {
+            if !configurationCommitted {
+                session.commitConfiguration()
+            }
+        }
+
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
               let cameraInput = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(cameraInput) else {
@@ -39,24 +46,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             return
         }
 
-        do {
-            let candidates = camera.formats.filter { format in
-                let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                let fpsOK = format.videoSupportedFrameRateRanges.contains { $0.maxFrameRate >= 59.9 }
-                return d.width == 1920 && d.height == 1080 && fpsOK
-            }
-            if let format = candidates.last {
-                try camera.lockForConfiguration()
-                camera.activeFormat = format
-                camera.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 60)
-                camera.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 60)
-                camera.unlockForConfiguration()
-                DispatchQueue.main.async { self.is60FPS = true }
-            }
-        } catch {
-            DispatchQueue.main.async { self.status = "60fps設定に失敗: \(error.localizedDescription)" }
-        }
-
+        let configuredFor60FPS = configureStable1080p60(camera)
         session.addInput(cameraInput)
 
         if includeAudio,
@@ -76,17 +66,96 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         if let connection = movieOutput.connection(with: .video) {
             connection.preferredVideoStabilizationMode = .off
             if movieOutput.availableVideoCodecTypes.contains(.h264) {
-                movieOutput.setOutputSettings([AVVideoCodecKey: AVVideoCodecType.h264], for: connection)
+                movieOutput.setOutputSettings([
+                    AVVideoCodecKey: AVVideoCodecType.h264,
+                    AVVideoCompressionPropertiesKey: [
+                        AVVideoExpectedSourceFrameRateKey: 60,
+                        AVVideoAverageBitRateKey: 16_000_000
+                    ]
+                ], for: connection)
             }
         }
 
-        // AVCaptureSession must not be started while a configuration transaction is open.
         session.commitConfiguration()
+        configurationCommitted = true
         session.startRunning()
 
-        let configuredFor60FPS = is60FPS
         DispatchQueue.main.async {
+            self.is60FPS = configuredFor60FPS
             self.status = configuredFor60FPS ? "1080p / 60fps" : "撮影可能（60fps非確認）"
+        }
+    }
+
+    /// Selects a normal 1080p format whose supported range is closest to 60 fps.
+    /// This deliberately avoids picking the last 1080p format because that can be a
+    /// 120/240-fps slow-motion format and can cause unstable exposure/preview behavior.
+    private func configureStable1080p60(_ camera: AVCaptureDevice) -> Bool {
+        let targetFPS = 60.0
+        let candidates: [(format: AVCaptureDevice.Format, maxFPS: Double, minFPS: Double)] = camera.formats.compactMap { format in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            guard dimensions.width == 1920, dimensions.height == 1080 else { return nil }
+
+            guard let range = format.videoSupportedFrameRateRanges.first(where: {
+                $0.minFrameRate <= targetFPS && $0.maxFrameRate >= targetFPS
+            }) else { return nil }
+
+            return (format, range.maxFrameRate, range.minFrameRate)
+        }
+
+        // Prefer a standard 60-fps format over slow-motion 120/240-fps formats.
+        guard let selected = candidates.min(by: { lhs, rhs in
+            let lhsDistance = abs(lhs.maxFPS - targetFPS)
+            let rhsDistance = abs(rhs.maxFPS - targetFPS)
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+
+            let lhsSubtype = CMFormatDescriptionGetMediaSubType(lhs.format.formatDescription)
+            let rhsSubtype = CMFormatDescriptionGetMediaSubType(rhs.format.formatDescription)
+            let fullRange = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            if lhsSubtype == fullRange && rhsSubtype != fullRange { return true }
+            if rhsSubtype == fullRange && lhsSubtype != fullRange { return false }
+
+            // Prefer the less extreme lower bound as a final tie breaker.
+            return lhs.minFPS > rhs.minFPS
+        }) else {
+            return false
+        }
+
+        do {
+            try camera.lockForConfiguration()
+            defer { camera.unlockForConfiguration() }
+
+            camera.activeFormat = selected.format
+
+            // Automatic low-light frame-rate switching conflicts with a strict 60-fps
+            // recording workflow on devices that expose this option.
+            if #available(iOS 18.0, *), selected.format.isAutoVideoFrameRateSupported {
+                camera.isAutoVideoFrameRateEnabled = false
+            }
+
+            camera.automaticallyAdjustsVideoHDREnabled = false
+            if selected.format.isVideoHDRSupported {
+                camera.isVideoHDREnabled = false
+            }
+
+            let frameDuration = CMTime(value: 1, timescale: 60)
+            camera.activeVideoMinFrameDuration = frameDuration
+            camera.activeVideoMaxFrameDuration = frameDuration
+
+            if camera.isExposureModeSupported(.continuousAutoExposure) {
+                camera.exposureMode = .continuousAutoExposure
+            }
+            if camera.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                camera.whiteBalanceMode = .continuousAutoWhiteBalance
+            }
+            if camera.isFocusModeSupported(.continuousAutoFocus) {
+                camera.focusMode = .continuousAutoFocus
+            }
+            return true
+        } catch {
+            DispatchQueue.main.async {
+                self.status = "60fps設定に失敗: \(error.localizedDescription)"
+            }
+            return false
         }
     }
 
@@ -130,7 +199,9 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         DispatchQueue.main.async {
             self.isRecording = false
             self.lastFinishedAt = Date()
-            self.status = error == nil ? (self.is60FPS ? "保存完了・1080p / 60fps" : "保存完了") : "保存エラー: \(error!.localizedDescription)"
+            self.status = error == nil
+                ? (self.is60FPS ? "保存完了・1080p / 60fps" : "保存完了")
+                : "保存エラー: \(error!.localizedDescription)"
             NotificationCenter.default.post(name: .recordingDidFinish, object: nil)
         }
     }

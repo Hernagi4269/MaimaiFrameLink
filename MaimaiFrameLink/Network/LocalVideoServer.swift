@@ -3,50 +3,120 @@ import Network
 
 final class LocalVideoServer: ObservableObject {
     @Published private(set) var status = "共有待機中"
+
     private var listener: NWListener?
+    private var restartWorkItem: DispatchWorkItem?
+    private var shouldRun = false
     private let queue = DispatchQueue(label: "MaimaiFrameLink.http")
 
     func start() {
-        guard listener == nil else { return }
-        do {
-            let l = try NWListener(using: .tcp, on: .any)
-            l.service = NWListener.Service(name: "MaimaiCamera", type: "_maimailens._tcp")
-            l.stateUpdateHandler = { [weak self] state in
-                DispatchQueue.main.async {
-                    switch state {
-                    case .ready:
-                        self?.status = "確認側から接続可能"
-                    case .failed(let error):
-                        self?.status = "共有エラー: \(error.localizedDescription)"
-                    default: break
-                    }
-                }
-            }
-            l.newConnectionHandler = { [weak self] in self?.handle($0) }
-            l.start(queue: queue)
-            listener = l
-        } catch {
-            status = "共有開始失敗: \(error.localizedDescription)"
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.shouldRun = true
+            self.startListenerIfNeeded()
         }
     }
 
     func stop() {
-        listener?.cancel(); listener = nil
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.shouldRun = false
+            self.restartWorkItem?.cancel()
+            self.restartWorkItem = nil
+            self.listener?.stateUpdateHandler = nil
+            self.listener?.cancel()
+            self.listener = nil
+            DispatchQueue.main.async { self.status = "共有停止" }
+        }
+    }
+
+    private func startListenerIfNeeded() {
+        guard shouldRun, listener == nil else { return }
+
+        do {
+            let parameters = NWParameters.tcp
+            // Allows direct iPhone-to-iPhone discovery/connection even when an arcade
+            // Wi-Fi network isn't available. Apple Network.framework supports this
+            // peer-to-peer Wi-Fi path when explicitly opted in.
+            parameters.includePeerToPeer = true
+
+            let newListener = try NWListener(using: parameters, on: .any)
+            newListener.service = NWListener.Service(name: "MaimaiCamera", type: "_maimailens._tcp")
+            newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+                guard let self else { return }
+                switch state {
+                case .setup:
+                    self.publishStatus("共有準備中")
+                case .waiting:
+                    self.publishStatus("接続待機中")
+                case .ready:
+                    self.publishStatus("確認側から接続可能")
+                case .failed(let error):
+                    self.publishStatus("共有を再接続中…")
+                    if self.listener === newListener {
+                        self.listener = nil
+                    }
+                    newListener?.cancel()
+                    self.scheduleRestart(after: 1.0, reason: error)
+                case .cancelled:
+                    if self.listener === newListener {
+                        self.listener = nil
+                    }
+                @unknown default:
+                    break
+                }
+            }
+            newListener.newConnectionHandler = { [weak self] connection in
+                self?.handle(connection)
+            }
+            listener = newListener
+            newListener.start(queue: queue)
+        } catch {
+            publishStatus("共有を再接続中…")
+            scheduleRestart(after: 1.0, reason: error)
+        }
+    }
+
+    private func scheduleRestart(after delay: TimeInterval, reason: Error) {
+        guard shouldRun else { return }
+        print("LocalVideoServer restarting after error: \(reason)")
+        restartWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.startListenerIfNeeded()
+        }
+        restartWorkItem = item
+        queue.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func publishStatus(_ text: String) {
+        DispatchQueue.main.async { [weak self] in self?.status = text }
     }
 
     private func handle(_ connection: NWConnection) {
+        connection.stateUpdateHandler = { state in
+            if case .failed(let error) = state {
+                print("Video client connection failed: \(error)")
+            }
+        }
         connection.start(queue: queue)
         receiveHeaders(connection, buffer: Data())
     }
 
     private func receiveHeaders(_ connection: NWConnection, buffer: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else { return }
-            if let error { connection.cancel(); print(error); return }
+            if let error {
+                // A viewer closing a request is normal and must not take the listener down.
+                print("Video request receive ended: \(error)")
+                connection.cancel()
+                return
+            }
             var merged = buffer
             if let data { merged.append(data) }
             if merged.range(of: Data("\r\n\r\n".utf8)) != nil {
                 self.respond(connection, requestData: merged)
+            } else if isComplete {
+                connection.cancel()
             } else if merged.count < 65536 {
                 self.receiveHeaders(connection, buffer: merged)
             } else {
@@ -137,7 +207,8 @@ final class LocalVideoServer: ObservableObject {
     }
 
     private func sendJSON(_ connection: NWConnection, code: Int, data: Data) {
-        let header = "HTTP/1.1 \(code) OK\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+        let reason = code == 200 ? "OK" : "Not Found"
+        let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         send(connection, data: Data(header.utf8) + data)
     }
 
