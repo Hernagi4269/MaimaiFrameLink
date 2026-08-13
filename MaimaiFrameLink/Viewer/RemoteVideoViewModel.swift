@@ -13,6 +13,9 @@ final class RemoteVideoViewModel: ObservableObject {
     @Published var durationSeconds: Double = 0
     @Published var videoAspectRatio: CGFloat = 9.0 / 16.0
     @Published var isBusy = false
+    @Published var isRemoteRecording = false
+    @Published var trimStartSeconds: Double = 0
+    @Published var trimEndSeconds: Double = 0
 
     private var baseURL: URL?
     private var timer: Timer?
@@ -125,6 +128,8 @@ final class RemoteVideoViewModel: ObservableObject {
                 let duration = try await item.asset.load(.duration)
                 durationSeconds = max(0, duration.seconds)
                 await updateAspectRatio(for: item.asset)
+                trimStartSeconds = 0
+                trimEndSeconds = durationSeconds
                 status = "1F送り対応"
             } catch {
                 status = "動画情報の取得に失敗"
@@ -180,6 +185,107 @@ final class RemoteVideoViewModel: ObservableObject {
     func seek(seconds: Double) {
         player.pause(); isPlaying = false
         player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func reloadConnection() {
+        player.pause()
+        isPlaying = false
+        status = "再読み込み中…"
+        refreshList(forceNewest: true)
+        Task { await fetchRecordingState() }
+    }
+
+    func setRemoteRecording(_ shouldRecord: Bool) async {
+        guard let baseURL, !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+        let path = shouldRecord ? "api/record/start" : "api/record/stop"
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 4
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                status = "録画操作に失敗しました"
+                return
+            }
+            isRemoteRecording = shouldRecord
+            status = shouldRecord ? "撮影側で録画開始" : "撮影側で録画停止"
+            if !shouldRecord {
+                try? await Task.sleep(for: .milliseconds(700))
+                refreshList(forceNewest: true)
+            }
+        } catch {
+            status = "録画操作に失敗: \(error.localizedDescription)"
+        }
+    }
+
+    func fetchRecordingState() async {
+        guard let baseURL else { return }
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("api/record/status"))
+            request.timeoutInterval = 2
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let recording = object["recording"] as? Bool else { return }
+            isRemoteRecording = recording
+        } catch { }
+    }
+
+    func markTrimStart() {
+        trimStartSeconds = min(currentSeconds, max(0, trimEndSeconds - 1.0 / 60.0))
+    }
+
+    func markTrimEnd() {
+        trimEndSeconds = max(currentSeconds, trimStartSeconds + 1.0 / 60.0)
+    }
+
+    func exportTrimToPhotos() async {
+        guard let info = current, let baseURL, !isBusy, trimEndSeconds > trimStartSeconds else { return }
+        isBusy = true
+        defer { isBusy = false }
+        status = "切り抜き用動画を取得中…"
+        do {
+            let remoteURL = baseURL.appendingPathComponent("videos").appendingPathComponent(info.fileName)
+            let (downloadURL, response) = try await URLSession.shared.download(from: remoteURL)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 || http.statusCode == 206 else {
+                status = "動画取得に失敗"; return
+            }
+            let localInput = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+            try? FileManager.default.removeItem(at: localInput)
+            try FileManager.default.moveItem(at: downloadURL, to: localInput)
+            defer { try? FileManager.default.removeItem(at: localInput) }
+
+            let asset = AVURLAsset(url: localInput)
+            guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+                status = "切り抜きを開始できません"; return
+            }
+            let output = FileManager.default.temporaryDirectory.appendingPathComponent("maimai_trim_\(UUID().uuidString).mp4")
+            try? FileManager.default.removeItem(at: output)
+            exporter.outputURL = output
+            exporter.outputFileType = .mp4
+            exporter.timeRange = CMTimeRange(
+                start: CMTime(seconds: trimStartSeconds, preferredTimescale: 60000),
+                duration: CMTime(seconds: trimEndSeconds - trimStartSeconds, preferredTimescale: 60000)
+            )
+            await withCheckedContinuation { continuation in
+                exporter.exportAsynchronously { continuation.resume() }
+            }
+            guard exporter.status == .completed else {
+                status = "切り抜きに失敗: \(exporter.error?.localizedDescription ?? "不明なエラー")"
+                return
+            }
+            defer { try? FileManager.default.removeItem(at: output) }
+            let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard auth == .authorized || auth == .limited else { status = "写真への追加権限が必要です"; return }
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: output)
+            }
+            status = "切り抜き動画を新規保存しました"
+        } catch {
+            status = "切り抜きに失敗: \(error.localizedDescription)"
+        }
     }
 
     func deleteCurrent() async {

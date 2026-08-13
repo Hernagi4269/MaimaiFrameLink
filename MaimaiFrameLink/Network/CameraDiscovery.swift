@@ -8,6 +8,7 @@ final class CameraDiscovery: NSObject, ObservableObject, NetServiceBrowserDelega
     private var services: [NetService] = []
     private var shouldRun = false
     private var restartWorkItem: DispatchWorkItem?
+    private var watchdog: Timer?
 
     override init() {
         super.init()
@@ -23,12 +24,23 @@ final class CameraDiscovery: NSObject, ObservableObject, NetServiceBrowserDelega
         status = "撮影側を検索中…"
         browser.stop()
         browser.searchForServices(ofType: "_maimailens._tcp.", inDomain: "local.")
+        watchdog?.invalidate()
+        watchdog = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self, self.shouldRun, self.baseURL == nil else { return }
+            self.browser.stop()
+            self.services.forEach { $0.stop() }
+            self.services.removeAll()
+            self.status = "P2P撮影側を再検索中…"
+            self.browser.searchForServices(ofType: "_maimailens._tcp.", inDomain: "local.")
+        }
     }
 
     func stop() {
         shouldRun = false
         restartWorkItem?.cancel()
         restartWorkItem = nil
+        watchdog?.invalidate()
+        watchdog = nil
         browser.stop()
         services.forEach { $0.stop() }
         services.removeAll()

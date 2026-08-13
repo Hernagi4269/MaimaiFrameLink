@@ -71,6 +71,25 @@ struct ViewerHomeView: View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 Button {
+                    discovery.start()
+                    vm.reloadConnection()
+                } label: {
+                    Label("再読込", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    Task { await vm.setRemoteRecording(!vm.isRemoteRecording) }
+                } label: {
+                    Label(vm.isRemoteRecording ? "録画停止" : "録画開始", systemImage: vm.isRemoteRecording ? "stop.circle.fill" : "record.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(vm.isRemoteRecording ? .red : nil)
+                .disabled(discovery.baseURL == nil || vm.isBusy)
+            }
+
+            HStack(spacing: 10) {
+                Button {
                     vm.goOlder()
                 } label: {
                     Label("前の動画", systemImage: "chevron.left")
@@ -110,6 +129,23 @@ struct ViewerHomeView: View {
                 .buttonStyle(.borderedProminent)
                 control("+1F") { vm.step(1) }
                 control("+10F") { vm.step(10) }
+            }
+
+            VStack(spacing: 8) {
+                HStack {
+                    Button("開始点に設定") { vm.markTrimStart() }.buttonStyle(.bordered)
+                    Text(time(vm.trimStartSeconds)).font(.caption.monospacedDigit())
+                    Spacer()
+                    Button("終了点に設定") { vm.markTrimEnd() }.buttonStyle(.bordered)
+                    Text(time(vm.trimEndSeconds)).font(.caption.monospacedDigit())
+                }
+                Button {
+                    Task { await vm.exportTrimToPhotos() }
+                } label: {
+                    Label("この範囲を切り抜いて新規保存", systemImage: "scissors")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(vm.current == nil || vm.isBusy || vm.trimEndSeconds <= vm.trimStartSeconds)
             }
 
             HStack(spacing: 12) {

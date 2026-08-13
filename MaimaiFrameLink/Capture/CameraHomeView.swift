@@ -28,24 +28,65 @@ struct CameraHomeView: View {
     }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { geometry in
+            let landscapeScreen = geometry.size.width > geometry.size.height
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-            CameraPreview(session: recorder.session, orientation: selectedOrientation)
+                CameraPreview(
+                    session: recorder.session,
+                    orientation: selectedOrientation,
+                    onTapFocus: recorder.focus(at:)
+                )
                 .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
-                bottomControls
+                if landscapeScreen {
+                    landscapeOverlay
+                } else {
+                    VStack(spacing: 0) {
+                        topBar
+                        Spacer(minLength: 0)
+                        bottomControls
+                    }
+                }
             }
         }
         .onAppear {
             recorder.setCaptureOrientation(selectedOrientation)
+            server.startRecordingHandler = { recorder.startRecording() }
+            server.stopRecordingHandler = { recorder.stopRecording() }
+            server.recordingStateHandler = { recorder.isRecording }
             server.start()
         }
         .onDisappear {
             server.stop()
+        }
+    }
+
+    private var landscapeOverlay: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(recorder.status).font(.caption.bold())
+                Text(server.status).font(.caption2).foregroundStyle(.secondary)
+                orientationPanel
+                    .frame(maxWidth: 280)
+                Button("役割変更", action: onChangeRole)
+                    .buttonStyle(.bordered)
+                Spacer()
+            }
+            .padding(12)
+            .frame(width: 300)
+            .background(.black.opacity(0.38))
+
+            Spacer(minLength: 0)
+
+            VStack {
+                Spacer()
+                shutterButton
+                Spacer()
+            }
+            .frame(width: 112)
+            .background(.black.opacity(0.28))
         }
     }
 
@@ -75,28 +116,26 @@ struct CameraHomeView: View {
         VStack(spacing: 16) {
             orientationPanel
 
-            Button(action: recorder.toggleRecording) {
-                ZStack {
-                    Circle()
-                        .fill(.white)
-                        .frame(width: 82, height: 82)
-                    if recorder.isRecording {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(.red)
-                            .frame(width: 40, height: 40)
-                    } else {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 66, height: 66)
-                    }
-                }
-            }
-            .accessibilityLabel(recorder.isRecording ? "録画停止" : "録画開始")
+            shutterButton
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)
         .padding(.bottom, 22)
         .background(.black.opacity(0.52))
+    }
+
+    private var shutterButton: some View {
+        Button(action: recorder.toggleRecording) {
+            ZStack {
+                Circle().fill(.white).frame(width: 82, height: 82)
+                if recorder.isRecording {
+                    RoundedRectangle(cornerRadius: 8).fill(.red).frame(width: 40, height: 40)
+                } else {
+                    Circle().fill(.red).frame(width: 66, height: 66)
+                }
+            }
+        }
+        .accessibilityLabel(recorder.isRecording ? "録画停止" : "録画開始")
     }
 
     private var orientationPanel: some View {

@@ -8,6 +8,9 @@ final class LocalVideoServer: ObservableObject {
     private var restartWorkItem: DispatchWorkItem?
     private var shouldRun = false
     private let queue = DispatchQueue(label: "MaimaiFrameLink.http")
+    var startRecordingHandler: (() -> Void)?
+    var stopRecordingHandler: (() -> Void)?
+    var recordingStateHandler: (() -> Bool)?
 
     func start() {
         queue.async { [weak self] in
@@ -147,6 +150,22 @@ final class LocalVideoServer: ObservableObject {
         if path == "/api/list" {
             let data = (try? JSONEncoder.iso8601.encode(VideoStore.shared.list())) ?? Data("[]".utf8)
             sendJSON(connection, code: 200, data: data)
+            return
+        }
+        if method == "POST", path == "/api/record/start" {
+            DispatchQueue.main.async { [weak self] in self?.startRecordingHandler?() }
+            sendJSON(connection, code: 200, data: Data("{\"ok\":true}".utf8))
+            return
+        }
+        if method == "POST", path == "/api/record/stop" {
+            DispatchQueue.main.async { [weak self] in self?.stopRecordingHandler?() }
+            sendJSON(connection, code: 200, data: Data("{\"ok\":true}".utf8))
+            return
+        }
+        if path == "/api/record/status" {
+            let recording = recordingStateHandler?() ?? false
+            let json = recording ? "{\"recording\":true}" : "{\"recording\":false}"
+            sendJSON(connection, code: 200, data: Data(json.utf8))
             return
         }
         if method == "DELETE", path.hasPrefix("/api/videos/") {

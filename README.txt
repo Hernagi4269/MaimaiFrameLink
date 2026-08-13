@@ -45,3 +45,11 @@ Windowsのみ・無料でのビルド
 - 「縦 / 横」で動画の向きを選択し、「180°」でその向きを反転します。
 - 撮影方向の指定はカメラプレビューと録画動画にのみ適用します。
 - 録画中は誤操作防止のため方向変更を無効化します。
+
+v0.5 planned improvements integrated:
+- Landscape capture UI reduced; shutter fixed on the right edge like Camera.app.
+- Viewer can start/stop recording on the capture iPhone.
+- Viewer reload button re-runs discovery and refreshes the newest video.
+- Offline peer-to-peer discovery retry strengthened (Wi-Fi/Bluetooth must remain enabled).
+- Trim: mark start/end at the current frame and save a new trimmed copy to Photos; source remains untouched.
+- Imported local videos remain deferred.

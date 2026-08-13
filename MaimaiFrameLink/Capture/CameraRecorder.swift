@@ -37,6 +37,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let sessionQueue = DispatchQueue(label: "MaimaiFrameLink.capture")
+    private var videoDevice: AVCaptureDevice?
 
     override init() {
         super.init()
@@ -74,6 +75,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         }
 
         let configuredFor60FPS = configureStable1080p60(camera)
+        videoDevice = camera
         session.addInput(cameraInput)
 
         if includeAudio,
@@ -174,15 +176,73 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             if camera.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
                 camera.whiteBalanceMode = .continuousAutoWhiteBalance
             }
-            if camera.isFocusModeSupported(.continuousAutoFocus) {
-                camera.focusMode = .continuousAutoFocus
-            }
+            configureInitialFocus(camera)
             return true
         } catch {
             DispatchQueue.main.async {
                 self.status = "60fps設定に失敗: \(error.localizedDescription)"
             }
             return false
+        }
+    }
+
+
+    /// Camera.app-like stable focus behavior for a fixed gameplay camera:
+    /// perform a single autofocus pass at the center, then let AVFoundation lock it.
+    /// A later screen tap performs another one-shot autofocus at that point.
+    private func configureInitialFocus(_ camera: AVCaptureDevice) {
+        if camera.isSmoothAutoFocusSupported {
+            camera.isSmoothAutoFocusEnabled = true
+        }
+
+        if camera.isFocusPointOfInterestSupported {
+            camera.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5)
+        }
+
+        if camera.isFocusModeSupported(.autoFocus) {
+            camera.focusMode = .autoFocus
+        } else if camera.isFocusModeSupported(.locked) {
+            camera.focusMode = .locked
+        }
+    }
+
+    /// Re-focuses once at the tapped preview point. The point is in AVFoundation's
+    /// normalized capture-device coordinate system (0...1).
+    func focus(at devicePoint: CGPoint) {
+        let clamped = CGPoint(
+            x: min(max(devicePoint.x, 0), 1),
+            y: min(max(devicePoint.y, 0), 1)
+        )
+
+        sessionQueue.async { [weak self] in
+            guard let self, let camera = self.videoDevice else { return }
+
+            do {
+                try camera.lockForConfiguration()
+                defer { camera.unlockForConfiguration() }
+
+                if camera.isFocusPointOfInterestSupported {
+                    camera.focusPointOfInterest = clamped
+                }
+                if camera.isFocusModeSupported(.autoFocus) {
+                    camera.focusMode = .autoFocus
+                }
+
+                // Match the familiar tap-to-focus behavior by metering exposure at
+                // the same point while keeping exposure adaptive to arcade lighting.
+                if camera.isExposurePointOfInterestSupported {
+                    camera.exposurePointOfInterest = clamped
+                }
+                if camera.isExposureModeSupported(.continuousAutoExposure) {
+                    camera.exposureMode = .continuousAutoExposure
+                } else if camera.isExposureModeSupported(.autoExpose) {
+                    camera.exposureMode = .autoExpose
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.status = "フォーカス設定に失敗: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
