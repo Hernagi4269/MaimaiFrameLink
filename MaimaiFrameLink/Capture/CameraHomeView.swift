@@ -251,7 +251,7 @@ struct CameraHomeView: View {
                         Label("マイク録音", systemImage: "mic.fill")
                         Spacer()
                         Text(recorder.audioEnabled ? "48kHz AAC" : "利用不可")
-                            .foregroundStyle(recorder.audioEnabled ? .secondary : .red)
+                            .foregroundStyle(recorder.audioEnabled ? Color.secondary : Color.red)
                     }
                 }
 
