@@ -108,14 +108,7 @@ struct CameraHomeView: View {
                 Divider()
                     .frame(height: 28)
 
-                Button {
-                    setReversed(!isReversed)
-                } label: {
-                    Label("180°", systemImage: "rotate.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(isReversed ? .borderedProminent : .bordered)
-                .disabled(recorder.isRecording)
+                reverseButton
             }
 
             Text(orientationDescription)
@@ -125,15 +118,49 @@ struct CameraHomeView: View {
     }
 
     @ViewBuilder
-    private func orientationModeButton(_ layout: CaptureLayout) -> some View {
-        Button {
-            setLayout(layout)
-        } label: {
-            Label(layout.title, systemImage: layout.icon)
-                .frame(maxWidth: .infinity)
+    private var reverseButton: some View {
+        if isReversed {
+            Button {
+                setReversed(false)
+            } label: {
+                Label("180°", systemImage: "rotate.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(recorder.isRecording)
+        } else {
+            Button {
+                setReversed(true)
+            } label: {
+                Label("180°", systemImage: "rotate.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(recorder.isRecording)
         }
-        .buttonStyle(layout == selectedLayout ? .borderedProminent : .bordered)
-        .disabled(recorder.isRecording)
+    }
+
+    @ViewBuilder
+    private func orientationModeButton(_ layout: CaptureLayout) -> some View {
+        if layout == selectedLayout {
+            Button {
+                setLayout(layout)
+            } label: {
+                Label(layout.title, systemImage: layout.icon)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(recorder.isRecording)
+        } else {
+            Button {
+                setLayout(layout)
+            } label: {
+                Label(layout.title, systemImage: layout.icon)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(recorder.isRecording)
+        }
     }
 
     private var orientationDescription: String {
