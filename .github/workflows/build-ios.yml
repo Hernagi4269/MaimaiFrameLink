@@ -1,0 +1,27 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned IPA
+        run: ./scripts/build_unsigned_ipa.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaimaiFrameLink
+          path: build/MaimaiFrameLink.ipa
+          if-no-files-found: error
+          retention-days: 7
