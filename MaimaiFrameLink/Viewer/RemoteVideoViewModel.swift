@@ -21,6 +21,22 @@ final class RemoteVideoViewModel: ObservableObject {
     private var timer: Timer?
     private var periodicToken: Any?
 
+    init() {
+        configurePlaybackAudio()
+        player.isMuted = false
+        player.volume = 1.0
+    }
+
+    private func configurePlaybackAudio() {
+        do {
+            let audio = AVAudioSession.sharedInstance()
+            try audio.setCategory(.playback, mode: .moviePlayback)
+            try audio.setActive(true)
+        } catch {
+            print("Playback audio session configuration failed: \(error)")
+        }
+    }
+
     var current: VideoInfo? {
         guard videos.indices.contains(selectedIndex) else { return nil }
         return videos[selectedIndex]
@@ -164,6 +180,9 @@ final class RemoteVideoViewModel: ObservableObject {
     }
 
     func togglePlay() {
+        configurePlaybackAudio()
+        player.isMuted = false
+        player.volume = 1.0
         if player.timeControlStatus == .playing {
             player.pause(); isPlaying = false
         } else {

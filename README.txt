@@ -53,3 +53,12 @@ v0.5 planned improvements integrated:
 - Offline peer-to-peer discovery retry strengthened (Wi-Fi/Bluetooth must remain enabled).
 - Trim: mark start/end at the current frame and save a new trimmed copy to Photos; source remains untouched.
 - Imported local videos remain deferred.
+
+v0.6.0
+- 横向き撮影UIを全面表示優先へ再設計。録画ボタンは右端中央、状態表示と設定は小型化。
+- 実際のAVCaptureDevice activeFormat / frameDurationを基に1080p/60fpsを表示。
+- 録画完了後に実ファイルの解像度・fps・音声トラック有無を検証して撮影側に表示。
+- 確認側のAVAudioSessionをmoviePlaybackに設定し、録画音声をスピーカー/イヤホンから再生。
+- マイク録音を48kHz AAC 128kbpsに明示設定。
+- タップAF/AE、AE/AFロック、露出補正を追加。
+- 1080p/60fps対応レンズが複数ある端末ではレンズ選択を追加。

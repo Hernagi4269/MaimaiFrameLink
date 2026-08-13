@@ -13,6 +13,7 @@ struct CameraHomeView: View {
     @StateObject private var recorder = CameraRecorder()
     @StateObject private var server = LocalVideoServer()
     @AppStorage("captureOrientation") private var storedOrientation = ManualCaptureOrientation.portrait.rawValue
+    @State private var showSettings = false
     let onChangeRole: () -> Void
 
     private var selectedOrientation: ManualCaptureOrientation {
@@ -23,13 +24,11 @@ struct CameraHomeView: View {
         selectedOrientation.isPortrait ? .portrait : .landscape
     }
 
-    private var isReversed: Bool {
-        selectedOrientation.isReversed
-    }
+    private var isReversed: Bool { selectedOrientation.isReversed }
 
     var body: some View {
         GeometryReader { geometry in
-            let landscapeScreen = geometry.size.width > geometry.size.height
+            let landscape = geometry.size.width > geometry.size.height
             ZStack {
                 Color.black.ignoresSafeArea()
 
@@ -40,16 +39,17 @@ struct CameraHomeView: View {
                 )
                 .ignoresSafeArea()
 
-                if landscapeScreen {
-                    landscapeOverlay
+                if landscape {
+                    landscapeCameraChrome
                 } else {
-                    VStack(spacing: 0) {
-                        topBar
-                        Spacer(minLength: 0)
-                        bottomControls
-                    }
+                    portraitCameraChrome
                 }
             }
+        }
+        .sheet(isPresented: $showSettings) {
+            cameraSettings
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .onAppear {
             recorder.setCaptureOrientation(selectedOrientation)
@@ -58,70 +58,101 @@ struct CameraHomeView: View {
             server.recordingStateHandler = { recorder.isRecording }
             server.start()
         }
-        .onDisappear {
-            server.stop()
-        }
+        .onDisappear { server.stop() }
     }
 
-    private var landscapeOverlay: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(recorder.status).font(.caption.bold())
-                Text(server.status).font(.caption2).foregroundStyle(.secondary)
-                orientationPanel
-                    .frame(maxWidth: 280)
-                Button("役割変更", action: onChangeRole)
-                    .buttonStyle(.bordered)
-                Spacer()
-            }
-            .padding(12)
-            .frame(width: 300)
-            .background(.black.opacity(0.38))
-
-            Spacer(minLength: 0)
-
+    private var landscapeCameraChrome: some View {
+        ZStack {
             VStack {
-                Spacer()
-                shutterButton
+                HStack(alignment: .top) {
+                    statusBadge
+                    Spacer()
+                    settingsButton
+                }
                 Spacer()
             }
-            .frame(width: 112)
-            .background(.black.opacity(0.28))
+            .padding(14)
+
+            HStack {
+                Spacer()
+                VStack(spacing: 12) {
+                    lensSelector(vertical: true)
+                    shutterButton
+                }
+                .padding(.trailing, 18)
+            }
+
+            if recorder.isRecording {
+                VStack {
+                    recordingBadge
+                        .padding(.top, 12)
+                    Spacer()
+                }
+            }
         }
     }
 
-    private var topBar: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(recorder.status)
-                    .font(.headline)
-                Text(server.status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    private var portraitCameraChrome: some View {
+        VStack {
+            HStack(alignment: .top) {
+                statusBadge
+                Spacer()
+                settingsButton
             }
+            .padding(14)
 
             Spacer()
 
-            Button("役割変更") {
-                onChangeRole()
-            }
-            .buttonStyle(.bordered)
+            lensSelector(vertical: false)
+                .padding(.bottom, 10)
+            shutterButton
+                .padding(.bottom, 24)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.black.opacity(0.52))
     }
 
-    private var bottomControls: some View {
-        VStack(spacing: 16) {
-            orientationPanel
-
-            shutterButton
+    private var statusBadge: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(recorder.formatLabel)
+                .font(.caption.bold())
+            if recorder.isRecording {
+                Text("● REC")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.red)
+            } else {
+                Text(server.status)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if !recorder.lastRecordingVerification.isEmpty && !recorder.isRecording {
+                Text(recorder.lastRecordingVerification)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 12)
-        .padding(.bottom, 22)
-        .background(.black.opacity(0.52))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var settingsButton: some View {
+        Button { showSettings = true } label: {
+            Image(systemName: "gearshape.fill")
+                .font(.title3)
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.55), in: Circle())
+        }
+        .foregroundStyle(.white)
+    }
+
+    private var recordingBadge: some View {
+        Text("録画中")
+            .font(.caption.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.red.opacity(0.9), in: Capsule())
     }
 
     private var shutterButton: some View {
@@ -129,82 +160,112 @@ struct CameraHomeView: View {
             ZStack {
                 Circle().fill(.white).frame(width: 82, height: 82)
                 if recorder.isRecording {
-                    RoundedRectangle(cornerRadius: 8).fill(.red).frame(width: 40, height: 40)
+                    RoundedRectangle(cornerRadius: 8).fill(.red).frame(width: 38, height: 38)
                 } else {
                     Circle().fill(.red).frame(width: 66, height: 66)
                 }
             }
+            .shadow(radius: 3)
         }
         .accessibilityLabel(recorder.isRecording ? "録画停止" : "録画開始")
     }
 
-    private var orientationPanel: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 10) {
-                orientationModeButton(.portrait)
-                orientationModeButton(.landscape)
-
-                Divider()
-                    .frame(height: 28)
-
-                reverseButton
+    @ViewBuilder
+    private func lensSelector(vertical: Bool) -> some View {
+        if recorder.availableLenses.count > 1 {
+            if vertical {
+                VStack(spacing: 6) { lensButtons }
+            } else {
+                HStack(spacing: 6) { lensButtons }
             }
-
-            Text(orientationDescription)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder
-    private var reverseButton: some View {
-        if isReversed {
+    private var lensButtons: some View {
+        ForEach(recorder.availableLenses) { lens in
             Button {
-                setReversed(false)
+                recorder.selectLens(lens)
             } label: {
-                Label("180°", systemImage: "rotate.right")
-                    .frame(maxWidth: .infinity)
+                Text(lens.title)
+                    .font(.caption.bold())
+                    .frame(minWidth: 38, minHeight: 32)
+                    .background(recorder.selectedLens == lens ? Color.yellow : Color.black.opacity(0.55), in: Capsule())
+                    .foregroundStyle(recorder.selectedLens == lens ? .black : .white)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(recorder.isRecording)
-        } else {
-            Button {
-                setReversed(true)
-            } label: {
-                Label("180°", systemImage: "rotate.right")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
             .disabled(recorder.isRecording)
         }
     }
 
-    @ViewBuilder
-    private func orientationModeButton(_ layout: CaptureLayout) -> some View {
-        if layout == selectedLayout {
-            Button {
-                setLayout(layout)
-            } label: {
-                Label(layout.title, systemImage: layout.icon)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(recorder.isRecording)
-        } else {
-            Button {
-                setLayout(layout)
-            } label: {
-                Label(layout.title, systemImage: layout.icon)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(recorder.isRecording)
-        }
-    }
+    private var cameraSettings: some View {
+        NavigationStack {
+            Form {
+                Section("撮影方向") {
+                    Picker("縦 / 横", selection: Binding(get: { selectedLayout }, set: { setLayout($0) })) {
+                        ForEach(CaptureLayout.allCases) { layout in
+                            Label(layout.title, systemImage: layout.icon).tag(layout)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(recorder.isRecording)
 
-    private var orientationDescription: String {
-        let base = selectedLayout == .portrait ? "縦撮影" : "横撮影"
-        return isReversed ? "\(base)・180°反転" : "\(base)・標準方向"
+                    Toggle("180°反転", isOn: Binding(get: { isReversed }, set: { setReversed($0) }))
+                        .disabled(recorder.isRecording)
+                }
+
+                Section("カメラ") {
+                    HStack {
+                        Text("実撮影フォーマット")
+                        Spacer()
+                        Text(recorder.formatLabel).foregroundStyle(.secondary)
+                    }
+
+                    if recorder.availableLenses.count > 1 {
+                        Picker("レンズ", selection: Binding(get: { recorder.selectedLens }, set: { recorder.selectLens($0) })) {
+                            ForEach(recorder.availableLenses) { lens in Text(lens.title).tag(lens) }
+                        }
+                        .disabled(recorder.isRecording)
+                    }
+
+                    VStack(alignment: .leading) {
+                        HStack {
+                            Text("露出補正")
+                            Spacer()
+                            Text(String(format: "%+.1f EV", recorder.exposureBias)).monospacedDigit()
+                        }
+                        Slider(
+                            value: Binding(get: { Double(recorder.exposureBias) }, set: { recorder.setExposureBias(Float($0)) }),
+                            in: Double(recorder.minExposureBias)...Double(recorder.maxExposureBias),
+                            step: 0.1
+                        )
+                    }
+
+                    Toggle("AE/AFロック", isOn: Binding(get: { recorder.isAEAFLocked }, set: { recorder.setAEAFLocked($0) }))
+                    Text("画面タップでその位置へAF/AEを合わせます。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("音声") {
+                    HStack {
+                        Label("マイク録音", systemImage: "mic.fill")
+                        Spacer()
+                        Text(recorder.audioEnabled ? "48kHz AAC" : "利用不可")
+                            .foregroundStyle(recorder.audioEnabled ? .secondary : .red)
+                    }
+                }
+
+                Section {
+                    Button("役割を変更", action: onChangeRole)
+                }
+            }
+            .navigationTitle("撮影設定")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完了") { showSettings = false }
+                }
+            }
+        }
     }
 
     private func setLayout(_ layout: CaptureLayout) {

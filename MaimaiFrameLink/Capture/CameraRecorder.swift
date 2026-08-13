@@ -27,17 +27,50 @@ enum ManualCaptureOrientation: String, CaseIterable, Identifiable {
     }
 }
 
+enum CameraLens: String, CaseIterable, Identifiable {
+    case ultraWide
+    case wide
+    case telephoto
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .ultraWide: return "0.5×"
+        case .wide: return "1×"
+        case .telephoto: return "望遠"
+        }
+    }
+
+    var deviceType: AVCaptureDevice.DeviceType {
+        switch self {
+        case .ultraWide: return .builtInUltraWideCamera
+        case .wide: return .builtInWideAngleCamera
+        case .telephoto: return .builtInTelephotoCamera
+        }
+    }
+}
+
 final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
     @Published private(set) var isRecording = false
     @Published private(set) var status = "準備中"
+    @Published private(set) var formatLabel = "1080p / 60fps"
     @Published private(set) var is60FPS = false
     @Published private(set) var lastFinishedAt: Date?
     @Published private(set) var captureOrientation: ManualCaptureOrientation = .portrait
+    @Published private(set) var availableLenses: [CameraLens] = [.wide]
+    @Published private(set) var selectedLens: CameraLens = .wide
+    @Published private(set) var exposureBias: Float = 0
+    @Published private(set) var minExposureBias: Float = -2
+    @Published private(set) var maxExposureBias: Float = 2
+    @Published private(set) var isAEAFLocked = false
+    @Published private(set) var audioEnabled = false
+    @Published private(set) var lastRecordingVerification = ""
 
     let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let sessionQueue = DispatchQueue(label: "MaimaiFrameLink.capture")
     private var videoDevice: AVCaptureDevice?
+    private var videoInput: AVCaptureDeviceInput?
 
     override init() {
         super.init()
@@ -52,7 +85,19 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
                 await MainActor.run { self.status = "カメラ権限が必要です" }
                 return
             }
+            if micOK { configureRecordingAudioSession() }
             sessionQueue.async { self.configureSession(includeAudio: micOK) }
+        }
+    }
+
+    private func configureRecordingAudioSession() {
+        do {
+            let audio = AVAudioSession.sharedInstance()
+            try audio.setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker])
+            try audio.setPreferredSampleRate(48_000)
+            try audio.setActive(true)
+        } catch {
+            print("Recording audio session configuration failed: \(error)")
         }
     }
 
@@ -62,12 +107,16 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
 
         var configurationCommitted = false
         defer {
-            if !configurationCommitted {
-                session.commitConfiguration()
-            }
+            if !configurationCommitted { session.commitConfiguration() }
         }
 
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        let lenses = discover60FPSLenses()
+        DispatchQueue.main.async {
+            self.availableLenses = lenses.isEmpty ? [.wide] : lenses
+        }
+
+        let initialLens: CameraLens = lenses.contains(.wide) ? .wide : (lenses.first ?? .wide)
+        guard let camera = device(for: initialLens),
               let cameraInput = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(cameraInput) else {
             DispatchQueue.main.async { self.status = "背面カメラを開始できません" }
@@ -76,6 +125,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
 
         let configuredFor60FPS = configureStable1080p60(camera)
         videoDevice = camera
+        videoInput = cameraInput
         session.addInput(cameraInput)
 
         if includeAudio,
@@ -92,6 +142,24 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         session.addOutput(movieOutput)
         movieOutput.movieFragmentInterval = .invalid
 
+        configureMovieOutput()
+
+        session.commitConfiguration()
+        configurationCommitted = true
+        session.startRunning()
+
+        let actual = actualCaptureDescription(camera)
+        DispatchQueue.main.async {
+            self.selectedLens = initialLens
+            self.is60FPS = configuredFor60FPS && actual.isFHD60
+            self.formatLabel = actual.label
+            self.audioEnabled = includeAudio && self.movieOutput.connection(with: .audio) != nil
+            self.status = self.is60FPS ? "撮影可能" : "60fpsを確認できません"
+            self.updateExposureRange(camera)
+        }
+    }
+
+    private func configureMovieOutput() {
         if let connection = movieOutput.connection(with: .video) {
             connection.preferredVideoStabilizationMode = .off
             if movieOutput.availableVideoCodecTypes.contains(.h264) {
@@ -99,72 +167,70 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
                     AVVideoCodecKey: AVVideoCodecType.h264,
                     AVVideoCompressionPropertiesKey: [
                         AVVideoExpectedSourceFrameRateKey: 60,
-                        AVVideoAverageBitRateKey: 16_000_000
+                        AVVideoAverageBitRateKey: 20_000_000,
+                        AVVideoMaxKeyFrameIntervalKey: 60
                     ]
                 ], for: connection)
             }
         }
 
-        session.commitConfiguration()
-        configurationCommitted = true
-        session.startRunning()
-
-        DispatchQueue.main.async {
-            self.is60FPS = configuredFor60FPS
-            self.status = configuredFor60FPS ? "1080p / 60fps" : "撮影可能（60fps非確認）"
+        if let audioConnection = movieOutput.connection(with: .audio) {
+            movieOutput.setOutputSettings([
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 48_000,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 128_000
+            ], for: audioConnection)
         }
     }
 
-    /// Selects a normal 1080p format whose supported range is closest to 60 fps.
-    /// This deliberately avoids picking the last 1080p format because that can be a
-    /// 120/240-fps slow-motion format and can cause unstable exposure/preview behavior.
+    private func discover60FPSLenses() -> [CameraLens] {
+        CameraLens.allCases.filter { lens in
+            guard let camera = device(for: lens) else { return false }
+            return has1080p60Format(camera)
+        }
+    }
+
+    private func device(for lens: CameraLens) -> AVCaptureDevice? {
+        AVCaptureDevice.default(lens.deviceType, for: .video, position: .back)
+    }
+
+    private func has1080p60Format(_ camera: AVCaptureDevice) -> Bool {
+        camera.formats.contains { format in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            guard dimensions.width == 1920, dimensions.height == 1080 else { return false }
+            return format.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= 60 && $0.maxFrameRate >= 60 }
+        }
+    }
+
     private func configureStable1080p60(_ camera: AVCaptureDevice) -> Bool {
         let targetFPS = 60.0
         let candidates: [(format: AVCaptureDevice.Format, maxFPS: Double, minFPS: Double)] = camera.formats.compactMap { format in
             let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             guard dimensions.width == 1920, dimensions.height == 1080 else { return nil }
-
             guard let range = format.videoSupportedFrameRateRanges.first(where: {
                 $0.minFrameRate <= targetFPS && $0.maxFrameRate >= targetFPS
             }) else { return nil }
-
             return (format, range.maxFrameRate, range.minFrameRate)
         }
 
-        // Prefer a standard 60-fps format over slow-motion 120/240-fps formats.
         guard let selected = candidates.min(by: { lhs, rhs in
             let lhsDistance = abs(lhs.maxFPS - targetFPS)
             let rhsDistance = abs(rhs.maxFPS - targetFPS)
             if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
-
-            let lhsSubtype = CMFormatDescriptionGetMediaSubType(lhs.format.formatDescription)
-            let rhsSubtype = CMFormatDescriptionGetMediaSubType(rhs.format.formatDescription)
-            let fullRange = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            if lhsSubtype == fullRange && rhsSubtype != fullRange { return true }
-            if rhsSubtype == fullRange && lhsSubtype != fullRange { return false }
-
-            // Prefer the less extreme lower bound as a final tie breaker.
             return lhs.minFPS > rhs.minFPS
-        }) else {
-            return false
-        }
+        }) else { return false }
 
         do {
             try camera.lockForConfiguration()
             defer { camera.unlockForConfiguration() }
 
             camera.activeFormat = selected.format
-
-            // Automatic low-light frame-rate switching conflicts with a strict 60-fps
-            // recording workflow on devices that expose this option.
             if #available(iOS 18.0, *), selected.format.isAutoVideoFrameRateSupported {
                 camera.isAutoVideoFrameRateEnabled = false
             }
-
             camera.automaticallyAdjustsVideoHDREnabled = false
-            if selected.format.isVideoHDRSupported {
-                camera.isVideoHDREnabled = false
-            }
+            if selected.format.isVideoHDRSupported { camera.isVideoHDREnabled = false }
 
             let frameDuration = CMTime(value: 1, timescale: 60)
             camera.activeVideoMinFrameDuration = frameDuration
@@ -179,26 +245,22 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             configureInitialFocus(camera)
             return true
         } catch {
-            DispatchQueue.main.async {
-                self.status = "60fps設定に失敗: \(error.localizedDescription)"
-            }
+            DispatchQueue.main.async { self.status = "60fps設定に失敗: \(error.localizedDescription)" }
             return false
         }
     }
 
+    private func actualCaptureDescription(_ camera: AVCaptureDevice) -> (label: String, isFHD60: Bool) {
+        let d = CMVideoFormatDescriptionGetDimensions(camera.activeFormat.formatDescription)
+        let seconds = CMTimeGetSeconds(camera.activeVideoMinFrameDuration)
+        let fps = seconds > 0 ? Int((1.0 / seconds).rounded()) : 0
+        let label = d.width == 1920 && d.height == 1080 ? "1080p / \(fps)fps" : "\(d.width)×\(d.height) / \(fps)fps"
+        return (label, d.width == 1920 && d.height == 1080 && fps >= 59)
+    }
 
-    /// Camera.app-like stable focus behavior for a fixed gameplay camera:
-    /// perform a single autofocus pass at the center, then let AVFoundation lock it.
-    /// A later screen tap performs another one-shot autofocus at that point.
     private func configureInitialFocus(_ camera: AVCaptureDevice) {
-        if camera.isSmoothAutoFocusSupported {
-            camera.isSmoothAutoFocusEnabled = true
-        }
-
-        if camera.isFocusPointOfInterestSupported {
-            camera.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5)
-        }
-
+        if camera.isSmoothAutoFocusSupported { camera.isSmoothAutoFocusEnabled = true }
+        if camera.isFocusPointOfInterestSupported { camera.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5) }
         if camera.isFocusModeSupported(.autoFocus) {
             camera.focusMode = .autoFocus
         } else if camera.isFocusModeSupported(.locked) {
@@ -206,42 +268,97 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         }
     }
 
-    /// Re-focuses once at the tapped preview point. The point is in AVFoundation's
-    /// normalized capture-device coordinate system (0...1).
     func focus(at devicePoint: CGPoint) {
-        let clamped = CGPoint(
-            x: min(max(devicePoint.x, 0), 1),
-            y: min(max(devicePoint.y, 0), 1)
-        )
-
+        let clamped = CGPoint(x: min(max(devicePoint.x, 0), 1), y: min(max(devicePoint.y, 0), 1))
         sessionQueue.async { [weak self] in
             guard let self, let camera = self.videoDevice else { return }
-
             do {
                 try camera.lockForConfiguration()
                 defer { camera.unlockForConfiguration() }
-
-                if camera.isFocusPointOfInterestSupported {
-                    camera.focusPointOfInterest = clamped
-                }
-                if camera.isFocusModeSupported(.autoFocus) {
-                    camera.focusMode = .autoFocus
-                }
-
-                // Match the familiar tap-to-focus behavior by metering exposure at
-                // the same point while keeping exposure adaptive to arcade lighting.
-                if camera.isExposurePointOfInterestSupported {
-                    camera.exposurePointOfInterest = clamped
-                }
+                if camera.isFocusPointOfInterestSupported { camera.focusPointOfInterest = clamped }
+                if camera.isFocusModeSupported(.autoFocus) { camera.focusMode = .autoFocus }
+                if camera.isExposurePointOfInterestSupported { camera.exposurePointOfInterest = clamped }
                 if camera.isExposureModeSupported(.continuousAutoExposure) {
                     camera.exposureMode = .continuousAutoExposure
                 } else if camera.isExposureModeSupported(.autoExpose) {
                     camera.exposureMode = .autoExpose
                 }
+                DispatchQueue.main.async { self.isAEAFLocked = false }
             } catch {
-                DispatchQueue.main.async {
-                    self.status = "フォーカス設定に失敗: \(error.localizedDescription)"
+                DispatchQueue.main.async { self.status = "フォーカス設定に失敗: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    func setAEAFLocked(_ locked: Bool) {
+        sessionQueue.async { [weak self] in
+            guard let self, let camera = self.videoDevice else { return }
+            do {
+                try camera.lockForConfiguration()
+                defer { camera.unlockForConfiguration() }
+                if locked {
+                    if camera.isFocusModeSupported(.locked) { camera.focusMode = .locked }
+                    if camera.isExposureModeSupported(.locked) { camera.exposureMode = .locked }
+                } else {
+                    configureInitialFocus(camera)
+                    if camera.isExposureModeSupported(.continuousAutoExposure) { camera.exposureMode = .continuousAutoExposure }
                 }
+                DispatchQueue.main.async { self.isAEAFLocked = locked }
+            } catch {
+                DispatchQueue.main.async { self.status = "AE/AF設定に失敗: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    func setExposureBias(_ value: Float) {
+        sessionQueue.async { [weak self] in
+            guard let self, let camera = self.videoDevice else { return }
+            let clamped = min(max(value, camera.minExposureTargetBias), camera.maxExposureTargetBias)
+            do {
+                try camera.lockForConfiguration()
+                camera.setExposureTargetBias(clamped, completionHandler: nil)
+                camera.unlockForConfiguration()
+                DispatchQueue.main.async { self.exposureBias = clamped }
+            } catch {
+                DispatchQueue.main.async { self.status = "露出補正に失敗: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    private func updateExposureRange(_ camera: AVCaptureDevice) {
+        minExposureBias = max(camera.minExposureTargetBias, -3)
+        maxExposureBias = min(camera.maxExposureTargetBias, 3)
+        exposureBias = camera.exposureTargetBias
+    }
+
+    func selectLens(_ lens: CameraLens) {
+        guard !isRecording, lens != selectedLens else { return }
+        sessionQueue.async { [weak self] in
+            guard let self, let newDevice = self.device(for: lens), self.has1080p60Format(newDevice) else { return }
+            guard let newInput = try? AVCaptureDeviceInput(device: newDevice) else { return }
+
+            self.session.beginConfiguration()
+            if let oldInput = self.videoInput { self.session.removeInput(oldInput) }
+            guard self.session.canAddInput(newInput) else {
+                if let oldInput = self.videoInput, self.session.canAddInput(oldInput) { self.session.addInput(oldInput) }
+                self.session.commitConfiguration()
+                return
+            }
+            let ok = self.configureStable1080p60(newDevice)
+            self.session.addInput(newInput)
+            self.videoInput = newInput
+            self.videoDevice = newDevice
+            self.configureMovieOutput()
+            self.session.commitConfiguration()
+            self.applyRotationToMovieOutput()
+
+            let actual = self.actualCaptureDescription(newDevice)
+            DispatchQueue.main.async {
+                self.selectedLens = lens
+                self.is60FPS = ok && actual.isFHD60
+                self.formatLabel = actual.label
+                self.updateExposureRange(newDevice)
+                self.status = self.is60FPS ? "撮影可能" : "60fpsを確認できません"
             }
         }
     }
@@ -252,18 +369,17 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         applyRotationToMovieOutput()
     }
 
-    func toggleRecording() {
-        isRecording ? stopRecording() : startRecording()
-    }
+    func toggleRecording() { isRecording ? stopRecording() : startRecording() }
 
     func startRecording() {
         guard session.isRunning, !movieOutput.isRecording else { return }
         applyRotationToMovieOutput()
+        configureRecordingAudioSession()
         let url = VideoStore.shared.newRecordingURL()
         movieOutput.startRecording(to: url, recordingDelegate: self)
         DispatchQueue.main.async {
             self.isRecording = true
-            self.status = self.is60FPS ? "録画中 1080p / 60fps" : "録画中"
+            self.status = "録画中"
         }
     }
 
@@ -275,9 +391,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     private func applyRotationToMovieOutput() {
         guard let connection = movieOutput.connection(with: .video) else { return }
         let angle = captureOrientation.rotationAngle
-        if connection.isVideoRotationAngleSupported(angle) {
-            connection.videoRotationAngle = angle
-        }
+        if connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
     }
 
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
@@ -285,10 +399,27 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         DispatchQueue.main.async {
             self.isRecording = false
             self.lastFinishedAt = Date()
-            self.status = error == nil
-                ? (self.is60FPS ? "保存完了・1080p / 60fps" : "保存完了")
-                : "保存エラー: \(error!.localizedDescription)"
+            self.status = error == nil ? "保存完了" : "保存エラー: \(error!.localizedDescription)"
             NotificationCenter.default.post(name: .recordingDidFinish, object: nil)
+        }
+        guard error == nil else { return }
+        Task { await verifyRecording(at: outputFileURL) }
+    }
+
+    private func verifyRecording(at url: URL) async {
+        let asset = AVURLAsset(url: url)
+        do {
+            guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else { return }
+            let size = try await videoTrack.load(.naturalSize)
+            let fps = try await videoTrack.load(.nominalFrameRate)
+            let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
+            let text = "\(Int(size.width))×\(Int(size.height)) / \(Int(fps.rounded()))fps / \(audioTrack == nil ? "音声なし" : "音声あり")"
+            await MainActor.run {
+                self.lastRecordingVerification = text
+                self.status = "保存完了・\(text)"
+            }
+        } catch {
+            await MainActor.run { self.lastRecordingVerification = "録画検証失敗" }
         }
     }
 }
