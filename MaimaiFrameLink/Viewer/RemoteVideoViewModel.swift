@@ -2,6 +2,12 @@ import AVFoundation
 import Foundation
 import Photos
 
+private struct RecordingStopResponse: Decodable {
+    let ok: Bool
+    let recording: Bool?
+    let latest: VideoInfo?
+}
+
 @MainActor
 final class RemoteVideoViewModel: ObservableObject {
     @Published var player = AVPlayer()
@@ -84,7 +90,8 @@ final class RemoteVideoViewModel: ObservableObject {
             return
         }
         refreshList(forceNewest: true)
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        Task { await fetchRecordingState() }
+        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshList(forceNewest: false) }
         }
     }
@@ -256,22 +263,54 @@ final class RemoteVideoViewModel: ObservableObject {
         let path = shouldRecord ? "api/record/start" : "api/record/stop"
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
-        request.timeoutInterval = 4
+        // Stop waits for AVCaptureMovieFileOutput to finish writing the file.
+        request.timeoutInterval = shouldRecord ? 4 : 20
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 status = "録画操作に失敗しました"
+                await fetchRecordingState()
                 return
             }
+
             isRemoteRecording = shouldRecord
-            status = shouldRecord ? "撮影側で録画開始" : "撮影側で録画停止"
-            if !shouldRecord {
-                try? await Task.sleep(for: .milliseconds(700))
+            if shouldRecord {
+                status = "撮影側で録画開始"
+                return
+            }
+
+            // The camera side responds only after the new MP4 is fully finalized.
+            // Load that exact file immediately instead of waiting for list polling.
+            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+            if let stop = try? decoder.decode(RecordingStopResponse.self, from: data),
+               let latest = stop.latest {
+                applyFinishedRecording(latest)
+                status = "録画停止・最新動画を読み込み中"
+            } else {
+                status = "録画停止・最新動画を確認中"
                 refreshList(forceNewest: true)
             }
         } catch {
             status = "録画操作に失敗: \(error.localizedDescription)"
+            await fetchRecordingState()
         }
+    }
+
+    func resumeAfterForeground() {
+        configurePlaybackAudio()
+        player.isMuted = false
+        player.volume = 1.0
+        status = "撮影側の状態を復元中…"
+        refreshList(forceNewest: false)
+        Task { await fetchRecordingState() }
+    }
+
+    private func applyFinishedRecording(_ latest: VideoInfo) {
+        var updated = videos.filter { $0.id != latest.id }
+        updated.insert(latest, at: 0)
+        videos = updated
+        selectedIndex = 0
+        loadCurrent()
     }
 
     func fetchRecordingState() async {

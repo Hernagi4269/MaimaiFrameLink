@@ -7,6 +7,7 @@ struct ViewerHomeView: View {
     @State private var dragging = false
     @State private var showDeleteConfirmation = false
     @State private var showTrimEditor = false
+    @Environment(\.scenePhase) private var scenePhase
     let onChangeRole: () -> Void
 
     var body: some View {
@@ -39,6 +40,14 @@ struct ViewerHomeView: View {
             }
         }
         .onAppear { discovery.start() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                // The viewer may have been locked during play. Recreate discovery and
+                // restore the camera-side recording state every time it comes back.
+                discovery.start()
+                vm.resumeAfterForeground()
+            }
+        }
         .onDisappear {
             discovery.stop()
             vm.connect(baseURL: nil)
@@ -71,7 +80,7 @@ struct ViewerHomeView: View {
             }
             Spacer(minLength: 4)
             Button {
-                discovery.start()
+                discovery.forceReconnect()
                 vm.reloadConnection()
             } label: {
                 Image(systemName: "arrow.clockwise")

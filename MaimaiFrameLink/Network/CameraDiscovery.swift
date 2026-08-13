@@ -1,107 +1,152 @@
 import Foundation
+import Network
 
-final class CameraDiscovery: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
+@MainActor
+final class CameraDiscovery: ObservableObject {
     @Published private(set) var baseURL: URL?
     @Published private(set) var status = "撮影側を検索中…"
 
-    private let browser = NetServiceBrowser()
-    private var services: [NetService] = []
-    private var shouldRun = false
-    private var restartWorkItem: DispatchWorkItem?
+    private var browser: NWBrowser?
+    private let proxy = PeerHTTPProxy()
+    private var selectedEndpointDescription: String?
     private var watchdog: Timer?
-
-    override init() {
-        super.init()
-        browser.delegate = self
-        browser.includesPeerToPeer = true
-    }
+    private var shouldRun = false
 
     func start() {
         shouldRun = true
-        restartWorkItem?.cancel()
-        services.removeAll()
+        stopBrowserOnly()
+        proxy.stop()
         baseURL = nil
+        selectedEndpointDescription = nil
         status = "撮影側を検索中…"
-        browser.stop()
-        browser.searchForServices(ofType: "_maimailens._tcp.", inDomain: "local.")
+
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
+        let browser = NWBrowser(for: .bonjour(type: "_maimailens._tcp", domain: "local."), using: parameters)
+        self.browser = browser
+
+        browser.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                guard let self, self.shouldRun else { return }
+                switch state {
+                case .ready:
+                    self.status = self.baseURL == nil ? "P2P撮影側を検索中…" : self.status
+                case .waiting:
+                    self.status = "撮影側への接続待機中…"
+                case .failed(let error):
+                    print("NWBrowser failed: \(error)")
+                    self.status = "再検索中…"
+                    self.scheduleRestart()
+                case .cancelled:
+                    break
+                default:
+                    break
+                }
+            }
+        }
+
+        browser.browseResultsChangedHandler = { [weak self] results, _ in
+            Task { @MainActor in
+                self?.handle(results: results)
+            }
+        }
+        browser.start(queue: DispatchQueue(label: "MaimaiFrameLink.browser"))
+
         watchdog?.invalidate()
-        watchdog = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            guard let self, self.shouldRun, self.baseURL == nil else { return }
-            self.browser.stop()
-            self.services.forEach { $0.stop() }
-            self.services.removeAll()
-            self.status = "P2P撮影側を再検索中…"
-            self.browser.searchForServices(ofType: "_maimailens._tcp.", inDomain: "local.")
+        watchdog = Timer.scheduledTimer(withTimeInterval: 6, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.shouldRun, self.baseURL == nil else { return }
+                self.status = "P2P撮影側を再検索中…"
+                self.restartBrowser()
+            }
         }
     }
 
     func stop() {
         shouldRun = false
-        restartWorkItem?.cancel()
-        restartWorkItem = nil
         watchdog?.invalidate()
         watchdog = nil
-        browser.stop()
-        services.forEach { $0.stop() }
-        services.removeAll()
+        stopBrowserOnly()
+        proxy.stop()
+        baseURL = nil
+        selectedEndpointDescription = nil
     }
 
-    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
-        DispatchQueue.main.async { self.status = "撮影側を検索中…" }
+    func forceReconnect() {
+        guard shouldRun else { start(); return }
+        restartBrowser()
     }
 
-    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        guard !services.contains(where: { $0 === service }) else { return }
-        services.append(service)
-        service.includesPeerToPeer = true
-        service.delegate = self
-        service.resolve(withTimeout: 8)
-    }
-
-    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        services.removeAll { $0 === service }
-        if baseURL != nil {
-            DispatchQueue.main.async {
-                self.baseURL = nil
-                self.status = "再接続中…"
+    private func handle(results: Set<NWBrowser.Result>) {
+        guard shouldRun else { return }
+        guard let result = results.first(where: {
+            if case .service = $0.endpoint { return true }
+            return false
+        }) else {
+            if baseURL != nil {
+                baseURL = nil
+                proxy.stop()
             }
-        }
-    }
-
-    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
-        DispatchQueue.main.async { self.status = "検索を再開中…" }
-        scheduleRestart()
-    }
-
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        guard let host = sender.hostName, sender.port > 0 else {
-            sender.resolve(withTimeout: 5)
+            selectedEndpointDescription = nil
+            status = "撮影側を検索中…"
             return
         }
-        var comps = URLComponents()
-        comps.scheme = "http"
-        comps.host = host
-        comps.port = sender.port
-        DispatchQueue.main.async {
-            self.baseURL = comps.url
-            self.status = "接続済み: \(sender.name)"
+
+        let description = String(describing: result.endpoint)
+        if selectedEndpointDescription == description, baseURL != nil { return }
+        selectedEndpointDescription = description
+        baseURL = nil
+        status = "撮影側へP2P接続中…"
+
+        proxy.start(remoteEndpoint: result.endpoint) { [weak self] localURL in
+            Task { @MainActor in
+                guard let self, self.shouldRun else { return }
+                if let localURL {
+                    self.baseURL = localURL
+                    self.status = "接続済み（P2P対応）"
+                } else {
+                    self.baseURL = nil
+                    self.status = "P2P接続を再試行中…"
+                    self.scheduleRestart()
+                }
+            }
         }
     }
 
-    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        DispatchQueue.main.async { self.status = "撮影側を再検索中…" }
-        if shouldRun {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak sender] in
-                sender?.resolve(withTimeout: 5)
+    private func restartBrowser() {
+        guard shouldRun else { return }
+        stopBrowserOnly()
+        proxy.stop()
+        baseURL = nil
+        selectedEndpointDescription = nil
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
+        let newBrowser = NWBrowser(for: .bonjour(type: "_maimailens._tcp", domain: "local."), using: parameters)
+        browser = newBrowser
+        newBrowser.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                guard let self else { return }
+                if case .failed = state { self.scheduleRestart() }
             }
         }
+        newBrowser.browseResultsChangedHandler = { [weak self] results, _ in
+            Task { @MainActor in self?.handle(results: results) }
+        }
+        newBrowser.start(queue: DispatchQueue(label: "MaimaiFrameLink.browser.restart"))
     }
 
     private func scheduleRestart() {
         guard shouldRun else { return }
-        restartWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in self?.start() }
-        restartWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.shouldRun, self.baseURL == nil else { return }
+            self.restartBrowser()
+        }
+    }
+
+    private func stopBrowserOnly() {
+        browser?.stateUpdateHandler = nil
+        browser?.browseResultsChangedHandler = nil
+        browser?.cancel()
+        browser = nil
     }
 }

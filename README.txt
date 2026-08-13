@@ -1,64 +1,50 @@
 Maimai Frame Link
 
 目的
-- サブiPhoneを三脚に固定したまま1080p/60fpsで撮影する。
-- 撮影動画の原本は撮影側iPhoneだけに保存する。
-- 確認側iPhoneからクラウド同期や手動転送なしで最新動画を再生・シーク・±1F/±10F確認する。
+- サブiPhoneを三脚に固定したまま1080p/60fps + 音声で撮影する。
+- 動画原本は撮影側iPhoneの Documents/Recordings に保存する。
+- 確認側iPhoneから手動転送なしで再生、シーク、±1F/±10F、保存、削除、切り抜きを行う。
+- ゲーセン等でWi-Fiルーターやテザリングがなくても、近距離の2台のiPhone間でApple peer-to-peer Wi-Fiを使って接続できる構成を目指す。
 
-構成
-- 同じアプリを2台へインストールし、初回に「撮影側」「確認側」を選択する。
-- 撮影側はBonjour + ローカルHTTP Range配信を行う。
-- 通常Wi-Fiに加え、Apple peer-to-peer Wi-Fiを有効にして2台を直接発見できるようにしている。
-- 動画はH.264 / 1080p / 60fpsを優先する。
+v0.7.0 安定化・省電力
+- 確認側のBonjour探索をNetwork.frameworkのNWBrowserへ移行。
+- 確認側内部にローカルHTTPプロキシを追加。AVPlayer/URLSessionは127.0.0.1へ接続し、プロキシがincludePeerToPeer=trueのNWConnectionで撮影側へ転送する。
+  これにより、従来の「発見だけP2P、実通信はURLSession」という屋外接続上の弱点を解消する。
+- 確認側がロック/バックグラウンドから復帰したら、撮影側を再探索し、録画中かどうかを再取得する。
+- 確認側から録画停止した場合、撮影側はMP4の書き込み完了までHTTP応答を待ち、完成した最新動画情報を直接返す。確認側は定期ポーリングを待たず、その動画を即読み込みする。
+- 通常の動画一覧ポーリングを1秒から3秒へ減らし、不要な通信と電力消費を削減。
+- 撮影側を開いている間は自動スリープを禁止。低電力モードでも撮影画面が自動ロックしないようにする。
+- 録画中のみ画面輝度を自動的に低くする省電力設定を追加。録画停止時/画面終了時には元の輝度へ戻す。
+- 低電力モード、空きストレージ、端末温度、カメラ中断、Audio Route変更を監視。
+- 空き容量が極端に少ない場合は録画開始を拒否し、録画破損を防ぐ。
+- 録画開始/停止の重複操作を抑制し、停止完了コールバックで状態を確定する。
 
-v0.2.0
-- 1080p/60fpsフォーマット選択を見直し、120/240fps向けスローモーション形式を誤選択しないよう修正。
-- HDRと自動低照度フレームレート切替を抑制し、露出・WB・AFは連続自動制御を維持。
-- Bonjour共有をpeer-to-peer対応にし、DefunctConnection等でListenerが落ちた場合の自動再起動を追加。
-- 確認側のBonjour探索もpeer-to-peer対応。
-- カメラ＋リズムリングをモチーフにした専用App Iconを追加。
+既存主要機能
+- 1080p/60fpsを対応AVCaptureDeviceFormatから明示選択。
+- H.264録画、48kHz AAC音声。
+- 横/縦 + 180°手動撮影方向。
+- 標準カメラ寄りの横向きUI。録画ボタンは右端中央。
+- タップAF/AE、AE/AFロック、露出補正、対応レンズ切替。
+- 確認側から録画開始/停止。
+- 前/次動画、再読込、フレーム番号表示、±1F/±10F。
+- 動画をメインiPhoneの写真へ任意保存。
+- 撮影側原本の削除。
+- 開始/終了フレームを指定して切り抜き動画を新規保存。元動画は保持。
 
 Windowsのみ・無料でのビルド
-1. このフォルダの内容をGitHubリポジトリのルートへ置く。
-2. .github/workflows/build-ios.yml がGitHub Actionsで実行される。
-3. 成功後、ArtifactのMaimaiFrameLink.zipからMaimaiFrameLink.ipaを取得する。
-4. Windows版SideloadlyでiPhoneへインストールする。
+1. このフォルダの内容をGitHubリポジトリのルートへ上書きする。
+2. .github/workflows/build-ios.yml をGitHub Actionsで実行する。
+3. 成功後、ArtifactからMaimaiFrameLink.ipaを取得する。
+4. Windows版Sideloadlyで2台のiPhoneへインストールする。
 
-注意
-- 無料Apple Accountでのサイドロードは署名期限の制約がある。
-- 60fpsの実動作、室内照明でのフリッカー、P2P接続速度、フレーム送りのレスポンスは実機で最終確認する。
+Sideloadly自動再署名
+- 無料Apple Accountでは署名期限がある。
+- PCとiPhoneでWi-Fi同期を有効化し、SideloadlyのAutomatic App Refreshを使用すると再署名を自動化できる。
 
-【v0.4.0 手動撮影方向】
-撮影側は端末の自動回転に追従しません。撮影画面上部の「縦 ↑ / 縦 ↓ / 横 ← / 横 →」から撮影方向を明示的に選択します。
-矢印は完成動画の「上」にしたい方向を示します。選択した方向は保存され、次回起動時も維持されます。録画中は方向変更できません。
-
-【Sideloadly 自動再署名（Windows）】
-1. PCとiPhoneを同じネットワークに接続します。
-2. 最初だけUSB接続し、iTunesの端末画面 > 概要 > オプション > 「Wi-Fi経由でこのiPhoneと同期」を有効にして同期します。
-3. SideloadlyでIPAを入れる際にAutomatic App Refresh（自動更新）を有効にします。
-4. 以後はSideloadly DaemonがPCで動作し、iPhoneをWi-FiまたはUSBで検出できた際に期限が近いアプリを自動再署名します。
-5. アプリ更新時も同じApple ID・同じBundle IDのまま、新しいIPAをAutomatic App Refresh有効で上書きインストールします。
-
-
-撮影方向UI
-- 画面全体やシャッターボタンは撮影方向の指定では回転しません。
-- 「縦 / 横」で動画の向きを選択し、「180°」でその向きを反転します。
-- 撮影方向の指定はカメラプレビューと録画動画にのみ適用します。
-- 録画中は誤操作防止のため方向変更を無効化します。
-
-v0.5 planned improvements integrated:
-- Landscape capture UI reduced; shutter fixed on the right edge like Camera.app.
-- Viewer can start/stop recording on the capture iPhone.
-- Viewer reload button re-runs discovery and refreshes the newest video.
-- Offline peer-to-peer discovery retry strengthened (Wi-Fi/Bluetooth must remain enabled).
-- Trim: mark start/end at the current frame and save a new trimmed copy to Photos; source remains untouched.
-- Imported local videos remain deferred.
-
-v0.6.0
-- 横向き撮影UIを全面表示優先へ再設計。録画ボタンは右端中央、状態表示と設定は小型化。
-- 実際のAVCaptureDevice activeFormat / frameDurationを基に1080p/60fpsを表示。
-- 録画完了後に実ファイルの解像度・fps・音声トラック有無を検証して撮影側に表示。
-- 確認側のAVAudioSessionをmoviePlaybackに設定し、録画音声をスピーカー/イヤホンから再生。
-- マイク録音を48kHz AAC 128kbpsに明示設定。
-- タップAF/AE、AE/AFロック、露出補正を追加。
-- 1080p/60fps対応レンズが複数ある端末ではレンズ選択を追加。
+実機で重点確認する項目
+- Wi-Fiルーター/テザリングなしのP2P接続。
+- 確認側で録画開始 → 確認側をロック → 復帰 → 録画状態復元 → 停止。
+- 録画停止後の最新動画即表示。
+- 低電力モードで撮影側が自動スリープしないこと。
+- 録画中の画面輝度低下と停止後の復元。
+- 長時間1080p/60fps時の発熱、バッテリー消費、音声、ストレージ警告。

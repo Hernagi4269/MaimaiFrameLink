@@ -56,6 +56,18 @@ final class VideoStore {
         }
     }
 
+    func availableCapacityBytes() -> Int64? {
+        do {
+            let values = try folderURL.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            if let capacity = values.volumeAvailableCapacityForImportantUsage {
+                return capacity
+            }
+        } catch {
+            print("VideoStore capacity check failed: \(error)")
+        }
+        return nil
+    }
+
     func deleteAll() {
         for item in list() {
             _ = delete(fileName: item.fileName)
