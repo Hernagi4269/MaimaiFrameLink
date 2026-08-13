@@ -1,0 +1,102 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000100 /* MaimaiFrameLinkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000000 /* MaimaiFrameLinkApp.swift */; };
+		A00000000000000000000101 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000001 /* RootView.swift */; };
+		A00000000000000000000102 /* VideoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000002 /* VideoStore.swift */; };
+		A00000000000000000000103 /* CameraRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* CameraRecorder.swift */; };
+		A00000000000000000000104 /* CameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000004 /* CameraPreview.swift */; };
+		A00000000000000000000105 /* CameraHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* CameraHomeView.swift */; };
+		A00000000000000000000106 /* LocalVideoServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* LocalVideoServer.swift */; };
+		A00000000000000000000107 /* CameraDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* CameraDiscovery.swift */; };
+		A00000000000000000000108 /* RemoteVideoViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* RemoteVideoViewModel.swift */; };
+		A00000000000000000000109 /* PlayerContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000009 /* PlayerContainer.swift */; };
+		A0000000000000000000010A /* ViewerHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000000A /* ViewerHomeView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A00000000000000000000000 /* MaimaiFrameLinkApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/App/MaimaiFrameLinkApp.swift; sourceTree = "<group>"; };
+		A00000000000000000000001 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/App/RootView.swift; sourceTree = "<group>"; };
+		A00000000000000000000002 /* VideoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Shared/VideoStore.swift; sourceTree = "<group>"; };
+		A00000000000000000000003 /* CameraRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Capture/CameraRecorder.swift; sourceTree = "<group>"; };
+		A00000000000000000000004 /* CameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Capture/CameraPreview.swift; sourceTree = "<group>"; };
+		A00000000000000000000005 /* CameraHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Capture/CameraHomeView.swift; sourceTree = "<group>"; };
+		A00000000000000000000006 /* LocalVideoServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Network/LocalVideoServer.swift; sourceTree = "<group>"; };
+		A00000000000000000000007 /* CameraDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Network/CameraDiscovery.swift; sourceTree = "<group>"; };
+		A00000000000000000000008 /* RemoteVideoViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Viewer/RemoteVideoViewModel.swift; sourceTree = "<group>"; };
+		A00000000000000000000009 /* PlayerContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Viewer/PlayerContainer.swift; sourceTree = "<group>"; };
+		A0000000000000000000000A /* ViewerHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MaimaiFrameLink/Viewer/ViewerHomeView.swift; sourceTree = "<group>"; };
+		A0000000000000000000000B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = MaimaiFrameLink/Info.plist; sourceTree = "<group>"; };
+		B00000000000000000000008 /* MaimaiFrameLink.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MaimaiFrameLink.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B00000000000000000000006 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B00000000000000000000002 = {isa = PBXGroup; children = (
+				A00000000000000000000000 /* MaimaiFrameLinkApp.swift */,
+				A00000000000000000000001 /* RootView.swift */,
+				A00000000000000000000002 /* VideoStore.swift */,
+				A00000000000000000000003 /* CameraRecorder.swift */,
+				A00000000000000000000004 /* CameraPreview.swift */,
+				A00000000000000000000005 /* CameraHomeView.swift */,
+				A00000000000000000000006 /* LocalVideoServer.swift */,
+				A00000000000000000000007 /* CameraDiscovery.swift */,
+				A00000000000000000000008 /* RemoteVideoViewModel.swift */,
+				A00000000000000000000009 /* PlayerContainer.swift */,
+				A0000000000000000000000A /* ViewerHomeView.swift */,
+				A0000000000000000000000B /* Info.plist */,
+				B00000000000000000000003 /* Products */,
+			); sourceTree = "<group>"; };
+		B00000000000000000000003 /* Products */ = {isa = PBXGroup; children = (B00000000000000000000008 /* MaimaiFrameLink.app */,); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B00000000000000000000004 /* MaimaiFrameLink */ = {isa = PBXNativeTarget; buildConfigurationList = B0000000000000000000000A; buildPhases = (B00000000000000000000005 /* Sources */, B00000000000000000000006 /* Frameworks */, B00000000000000000000007 /* Resources */,); buildRules = (); dependencies = (); name = MaimaiFrameLink; productName = MaimaiFrameLink; productReference = B00000000000000000000008; productType = "com.apple.product-type.application"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B00000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2600; LastUpgradeCheck = 2600; TargetAttributes = {B00000000000000000000004 = {CreatedOnToolsVersion = 26.0; }; }; }; buildConfigurationList = B00000000000000000000009; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = B00000000000000000000002; productRefGroup = B00000000000000000000003; projectDirPath = ""; projectRoot = ""; targets = (B00000000000000000000004,); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B00000000000000000000007 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B00000000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+				A00000000000000000000100 /* MaimaiFrameLinkApp.swift in Sources */,
+				A00000000000000000000101 /* RootView.swift in Sources */,
+				A00000000000000000000102 /* VideoStore.swift in Sources */,
+				A00000000000000000000103 /* CameraRecorder.swift in Sources */,
+				A00000000000000000000104 /* CameraPreview.swift in Sources */,
+				A00000000000000000000105 /* CameraHomeView.swift in Sources */,
+				A00000000000000000000106 /* LocalVideoServer.swift in Sources */,
+				A00000000000000000000107 /* CameraDiscovery.swift in Sources */,
+				A00000000000000000000108 /* RemoteVideoViewModel.swift in Sources */,
+				A00000000000000000000109 /* PlayerContainer.swift in Sources */,
+				A0000000000000000000010A /* ViewerHomeView.swift in Sources */,
+			); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B0000000000000000000000B /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_OPTIMIZATION_LEVEL = 0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
+		B0000000000000000000000C /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; COPY_PHASE_STRIP = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; }; name = Release; };
+		B0000000000000000000000D /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = MaimaiFrameLink/Info.plist; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = local.maimai.FrameLink; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
+		B0000000000000000000000E /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = MaimaiFrameLink/Info.plist; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = local.maimai.FrameLink; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B00000000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (B0000000000000000000000B, B0000000000000000000000C,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		B0000000000000000000000A = {isa = XCConfigurationList; buildConfigurations = (B0000000000000000000000D, B0000000000000000000000E,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = B00000000000000000000001 /* Project object */;
+}
