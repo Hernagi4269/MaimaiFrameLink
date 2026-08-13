@@ -150,8 +150,11 @@ final class RemoteVideoViewModel: ObservableObject {
 
     private func addObserver() {
         if let token = periodicToken { player.removeTimeObserver(token) }
-        periodicToken = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] time in
-            self?.currentSeconds = max(0, time.seconds)
+        periodicToken = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: nil) { [weak self] time in
+            let seconds = max(0, time.seconds)
+            Task { @MainActor [weak self] in
+                self?.currentSeconds = seconds
+            }
         }
     }
 

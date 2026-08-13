@@ -34,17 +34,7 @@ struct CameraHomeView: View {
                 .padding()
                 .background(.black.opacity(0.55))
 
-                HStack(spacing: 8) {
-                    ForEach(ManualCaptureOrientation.allCases) { orientation in
-                        Button(orientation.title) {
-                            storedOrientation = orientation.rawValue
-                            recorder.setCaptureOrientation(orientation)
-                            applyManualInterfaceOrientation(orientation)
-                        }
-                        .buttonStyle(orientation == selectedOrientation ? .borderedProminent : .bordered)
-                        .disabled(recorder.isRecording)
-                    }
-                }
+                orientationControls
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .background(.black.opacity(0.55))
@@ -73,4 +63,35 @@ struct CameraHomeView: View {
             server.stop()
         }
     }
+    private var orientationControls: some View {
+        HStack(spacing: 8) {
+            ForEach(ManualCaptureOrientation.allCases) { orientation in
+                orientationButton(for: orientation)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func orientationButton(for orientation: ManualCaptureOrientation) -> some View {
+        if orientation == selectedOrientation {
+            Button(orientation.title) {
+                selectOrientation(orientation)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(recorder.isRecording)
+        } else {
+            Button(orientation.title) {
+                selectOrientation(orientation)
+            }
+            .buttonStyle(.bordered)
+            .disabled(recorder.isRecording)
+        }
+    }
+
+    private func selectOrientation(_ orientation: ManualCaptureOrientation) {
+        storedOrientation = orientation.rawValue
+        recorder.setCaptureOrientation(orientation)
+        applyManualInterfaceOrientation(orientation)
+    }
+
 }
