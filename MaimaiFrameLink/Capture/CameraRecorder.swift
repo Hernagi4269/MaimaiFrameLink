@@ -9,13 +9,12 @@ enum ManualCaptureOrientation: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
-        switch self {
-        case .portrait: return "縦 ↑"
-        case .portraitUpsideDown: return "縦 ↓"
-        case .landscapeLeft: return "横 ←"
-        case .landscapeRight: return "横 →"
-        }
+    var isPortrait: Bool {
+        self == .portrait || self == .portraitUpsideDown
+    }
+
+    var isReversed: Bool {
+        self == .portraitUpsideDown || self == .landscapeRight
     }
 
     var rotationAngle: CGFloat {
@@ -26,50 +25,6 @@ enum ManualCaptureOrientation: String, CaseIterable, Identifiable {
         case .portrait: return 90
         }
     }
-
-    var interfaceOrientationMask: UIInterfaceOrientationMask {
-        switch self {
-        case .portrait: return .portrait
-        case .portraitUpsideDown: return .portraitUpsideDown
-        case .landscapeLeft: return .landscapeLeft
-        case .landscapeRight: return .landscapeRight
-        }
-    }
-
-    var interfaceOrientation: UIInterfaceOrientation {
-        switch self {
-        case .portrait: return .portrait
-        case .portraitUpsideDown: return .portraitUpsideDown
-        case .landscapeLeft: return .landscapeLeft
-        case .landscapeRight: return .landscapeRight
-        }
-    }
-}
-
-@MainActor
-func applyManualInterfaceOrientation(_ orientation: ManualCaptureOrientation) {
-    AppDelegate.orientationLock = orientation.interfaceOrientationMask
-
-    guard let scene = UIApplication.shared.connectedScenes
-        .compactMap({ $0 as? UIWindowScene })
-        .first else { return }
-
-    if #available(iOS 16.0, *) {
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation.interfaceOrientationMask))
-        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-    } else {
-        UIDevice.current.setValue(orientation.interfaceOrientation.rawValue, forKey: "orientation")
-        UIViewController.attemptRotationToDeviceOrientation()
-    }
-}
-
-@MainActor
-func unlockInterfaceOrientation() {
-    AppDelegate.orientationLock = [.portrait, .landscapeLeft, .landscapeRight]
-    UIApplication.shared.connectedScenes
-        .compactMap({ ($0 as? UIWindowScene)?.keyWindow?.rootViewController })
-        .first?
-        .setNeedsUpdateOfSupportedInterfaceOrientations()
 }
 
 final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
