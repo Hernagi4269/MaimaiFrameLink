@@ -16,6 +16,7 @@ final class RemoteVideoViewModel: ObservableObject {
     @Published var isRemoteRecording = false
     @Published var trimStartSeconds: Double = 0
     @Published var trimEndSeconds: Double = 0
+    @Published var videoFrameRate: Double = 60
 
     private var baseURL: URL?
     private var timer: Timer?
@@ -49,6 +50,23 @@ final class RemoteVideoViewModel: ObservableObject {
 
     var canGoOlder: Bool { selectedIndex + 1 < videos.count }
     var canGoNewer: Bool { selectedIndex > 0 }
+
+    var currentFrame: Int { frameNumber(for: currentSeconds) }
+    var totalFrames: Int { max(0, Int((durationSeconds * effectiveFrameRate).rounded(.down))) }
+    var currentFrameText: String { "F\(currentFrame)" }
+    var framePositionText: String { "F\(currentFrame) / F\(totalFrames)  •  \(formatFPS(effectiveFrameRate))fps" }
+    var trimStartDisplayText: String { "\(formatTime(trimStartSeconds))  •  F\(frameNumber(for: trimStartSeconds))" }
+    var trimEndDisplayText: String { "\(formatTime(trimEndSeconds))  •  F\(frameNumber(for: trimEndSeconds))" }
+    var trimRangeDisplayText: String {
+        let frames = max(0, frameNumber(for: trimEndSeconds) - frameNumber(for: trimStartSeconds))
+        return "\(formatTime(max(0, trimEndSeconds - trimStartSeconds)))  •  \(frames)F"
+    }
+    var hasValidTrimRange: Bool { trimEndSeconds > trimStartSeconds + (0.5 / effectiveFrameRate) }
+
+    private var effectiveFrameRate: Double {
+        guard videoFrameRate.isFinite, videoFrameRate > 1 else { return 60 }
+        return videoFrameRate
+    }
 
     func connect(baseURL: URL?) {
         guard self.baseURL != baseURL else { return }
@@ -143,7 +161,7 @@ final class RemoteVideoViewModel: ObservableObject {
             do {
                 let duration = try await item.asset.load(.duration)
                 durationSeconds = max(0, duration.seconds)
-                await updateAspectRatio(for: item.asset)
+                await updateVideoMetadata(for: item.asset)
                 trimStartSeconds = 0
                 trimEndSeconds = durationSeconds
                 status = "1F送り対応"
@@ -153,7 +171,7 @@ final class RemoteVideoViewModel: ObservableObject {
         }
     }
 
-    private func updateAspectRatio(for asset: AVAsset) async {
+    private func updateVideoMetadata(for asset: AVAsset) async {
         do {
             guard let track = try await asset.loadTracks(withMediaType: .video).first else { return }
             let size = try await track.load(.naturalSize)
@@ -164,8 +182,18 @@ final class RemoteVideoViewModel: ObservableObject {
             if width > 0, height > 0 {
                 videoAspectRatio = width / height
             }
+
+            let nominalRate = Double(try await track.load(.nominalFrameRate))
+            if nominalRate.isFinite, nominalRate > 1 {
+                videoFrameRate = nominalRate
+            } else {
+                let minDuration = try await track.load(.minFrameDuration)
+                if minDuration.seconds.isFinite, minDuration.seconds > 0 {
+                    videoFrameRate = 1.0 / minDuration.seconds
+                }
+            }
         } catch {
-            // Keep the previous/default ratio if metadata isn't available yet.
+            // Keep safe defaults when metadata is not available yet.
         }
     }
 
@@ -192,12 +220,19 @@ final class RemoteVideoViewModel: ObservableObject {
 
     func step(_ frames: Int) {
         player.pause(); isPlaying = false
-        guard let item = player.currentItem else { return }
-        if frames > 0 && item.canStepForward { item.step(byCount: frames) }
-        else if frames < 0 && item.canStepBackward { item.step(byCount: frames) }
-        else {
-            let target = CMTimeAdd(player.currentTime(), CMTime(value: CMTimeValue(frames), timescale: 60))
-            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        guard player.currentItem != nil else { return }
+
+        // Use exact-time seeking so the displayed frame, trim points and playback position
+        // all share the same source of truth even for streamed video.
+        let frameDuration = 1.0 / effectiveFrameRate
+        let current = actualPlaybackSeconds()
+        let targetSeconds = min(max(0, current + Double(frames) * frameDuration), durationSeconds)
+        let target = CMTime(seconds: targetSeconds, preferredTimescale: 60000)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.currentSeconds = self.actualPlaybackSeconds()
+            }
         }
     }
 
@@ -253,11 +288,41 @@ final class RemoteVideoViewModel: ObservableObject {
     }
 
     func markTrimStart() {
-        trimStartSeconds = min(currentSeconds, max(0, trimEndSeconds - 1.0 / 60.0))
+        let now = actualPlaybackSeconds()
+        currentSeconds = now
+        let minimumGap = 1.0 / effectiveFrameRate
+        trimStartSeconds = min(now, max(0, trimEndSeconds - minimumGap))
     }
 
     func markTrimEnd() {
-        trimEndSeconds = max(currentSeconds, trimStartSeconds + 1.0 / 60.0)
+        let now = actualPlaybackSeconds()
+        currentSeconds = now
+        let minimumGap = 1.0 / effectiveFrameRate
+        trimEndSeconds = max(now, trimStartSeconds + minimumGap)
+        trimEndSeconds = min(trimEndSeconds, durationSeconds)
+    }
+
+    private func actualPlaybackSeconds() -> Double {
+        let seconds = player.currentTime().seconds
+        guard seconds.isFinite else { return currentSeconds }
+        return min(max(0, seconds), max(0, durationSeconds))
+    }
+
+    private func frameNumber(for seconds: Double) -> Int {
+        guard seconds.isFinite else { return 0 }
+        return max(0, Int((max(0, seconds) * effectiveFrameRate).rounded(.down)))
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "0:00.00" }
+        let minutes = Int(seconds) / 60
+        let remainder = seconds - Double(minutes * 60)
+        return String(format: "%d:%05.2f", minutes, remainder)
+    }
+
+    private func formatFPS(_ fps: Double) -> String {
+        if abs(fps.rounded() - fps) < 0.05 { return String(Int(fps.rounded())) }
+        return String(format: "%.2f", fps)
     }
 
     func exportTrimToPhotos() async {
