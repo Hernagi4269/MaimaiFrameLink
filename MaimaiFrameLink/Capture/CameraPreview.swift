@@ -5,22 +5,16 @@ import UIKit
 final class PreviewView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
     var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    var manualOrientation: ManualCaptureOrientation = .portrait
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        updatePreviewRotation()
+        applyManualRotation()
     }
 
-    func updatePreviewRotation() {
+    func applyManualRotation() {
         guard let connection = previewLayer.connection else { return }
-        let orientation = window?.windowScene?.interfaceOrientation ?? .portrait
-        let angle: CGFloat
-        switch orientation {
-        case .landscapeLeft: angle = 0
-        case .landscapeRight: angle = 180
-        case .portraitUpsideDown: angle = 270
-        default: angle = 90
-        }
+        let angle = manualOrientation.rotationAngle
         if connection.isVideoRotationAngleSupported(angle) {
             connection.videoRotationAngle = angle
         }
@@ -29,15 +23,19 @@ final class PreviewView: UIView {
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    let orientation: ManualCaptureOrientation
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
+        view.manualOrientation = orientation
+        view.applyManualRotation()
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.updatePreviewRotation()
+        uiView.manualOrientation = orientation
+        uiView.applyManualRotation()
     }
 }

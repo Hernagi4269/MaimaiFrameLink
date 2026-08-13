@@ -1,11 +1,83 @@
 import AVFoundation
 import UIKit
 
+enum ManualCaptureOrientation: String, CaseIterable, Identifiable {
+    case portrait
+    case portraitUpsideDown
+    case landscapeLeft
+    case landscapeRight
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .portrait: return "縦 ↑"
+        case .portraitUpsideDown: return "縦 ↓"
+        case .landscapeLeft: return "横 ←"
+        case .landscapeRight: return "横 →"
+        }
+    }
+
+    var rotationAngle: CGFloat {
+        switch self {
+        case .landscapeLeft: return 0
+        case .landscapeRight: return 180
+        case .portraitUpsideDown: return 270
+        case .portrait: return 90
+        }
+    }
+
+    var interfaceOrientationMask: UIInterfaceOrientationMask {
+        switch self {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        }
+    }
+
+    var interfaceOrientation: UIInterfaceOrientation {
+        switch self {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        }
+    }
+}
+
+@MainActor
+func applyManualInterfaceOrientation(_ orientation: ManualCaptureOrientation) {
+    AppDelegate.orientationLock = orientation.interfaceOrientationMask
+
+    guard let scene = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene })
+        .first else { return }
+
+    if #available(iOS 16.0, *) {
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation.interfaceOrientationMask))
+        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+    } else {
+        UIDevice.current.setValue(orientation.interfaceOrientation.rawValue, forKey: "orientation")
+        UIViewController.attemptRotationToDeviceOrientation()
+    }
+}
+
+@MainActor
+func unlockInterfaceOrientation() {
+    AppDelegate.orientationLock = [.portrait, .landscapeLeft, .landscapeRight]
+    UIApplication.shared.connectedScenes
+        .compactMap({ ($0 as? UIWindowScene)?.keyWindow?.rootViewController })
+        .first?
+        .setNeedsUpdateOfSupportedInterfaceOrientations()
+}
+
 final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecordingDelegate, @unchecked Sendable {
     @Published private(set) var isRecording = false
     @Published private(set) var status = "準備中"
     @Published private(set) var is60FPS = false
     @Published private(set) var lastFinishedAt: Date?
+    @Published private(set) var captureOrientation: ManualCaptureOrientation = .portrait
 
     let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
@@ -159,13 +231,19 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         }
     }
 
+    func setCaptureOrientation(_ orientation: ManualCaptureOrientation) {
+        guard !isRecording else { return }
+        captureOrientation = orientation
+        applyRotationToMovieOutput()
+    }
+
     func toggleRecording() {
         isRecording ? stopRecording() : startRecording()
     }
 
     func startRecording() {
         guard session.isRunning, !movieOutput.isRecording else { return }
-        updateRotation()
+        applyRotationToMovieOutput()
         let url = VideoStore.shared.newRecordingURL()
         movieOutput.startRecording(to: url, recordingDelegate: self)
         DispatchQueue.main.async {
@@ -179,19 +257,12 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         movieOutput.stopRecording()
     }
 
-    private func updateRotation() {
+    private func applyRotationToMovieOutput() {
         guard let connection = movieOutput.connection(with: .video) else { return }
-        let orientation = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.interfaceOrientation }
-            .first ?? .portrait
-        let angle: CGFloat
-        switch orientation {
-        case .landscapeLeft: angle = 0
-        case .landscapeRight: angle = 180
-        case .portraitUpsideDown: angle = 270
-        default: angle = 90
+        let angle = captureOrientation.rotationAngle
+        if connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
         }
-        if connection.isVideoRotationAngleSupported(angle) { connection.videoRotationAngle = angle }
     }
 
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
