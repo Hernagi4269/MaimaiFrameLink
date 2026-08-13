@@ -315,13 +315,26 @@ final class RemoteVideoViewModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         status = "保存用動画を取得中…"
+
         let remoteURL = baseURL.appendingPathComponent("videos").appendingPathComponent(info.fileName)
+        var localURL: URL?
+
         do {
-            let (temporaryURL, response) = try await URLSession.shared.download(from: remoteURL)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 || (response as? HTTPURLResponse)?.statusCode == 206 else {
+            let (downloadedURL, response) = try await URLSession.shared.download(from: remoteURL)
+            guard let http = response as? HTTPURLResponse,
+                  http.statusCode == 200 || http.statusCode == 206 else {
                 status = "保存用動画の取得に失敗"
                 return
             }
+
+            // URLSession の download 一時URLは拡張子を持たない場合があるため、
+            // Photos に渡す前に明示的な .mp4 ファイルへ移す。
+            let destinationURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("MaimaiFrameLink_\(UUID().uuidString)")
+                .appendingPathExtension("mp4")
+            try? FileManager.default.removeItem(at: destinationURL)
+            try FileManager.default.moveItem(at: downloadedURL, to: destinationURL)
+            localURL = destinationURL
 
             let auth = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             guard auth == .authorized || auth == .limited else {
@@ -330,11 +343,20 @@ final class RemoteVideoViewModel: ObservableObject {
             }
 
             try await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: temporaryURL)
+                let request = PHAssetCreationRequest.forAsset()
+                let options = PHAssetResourceCreationOptions()
+                options.shouldMoveFile = false
+                options.originalFilename = info.fileName
+                request.addResource(with: .video, fileURL: destinationURL, options: options)
             }
+
             status = "メインiPhoneの写真に保存しました"
         } catch {
             status = "保存に失敗: \(error.localizedDescription)"
+        }
+
+        if let localURL {
+            try? FileManager.default.removeItem(at: localURL)
         }
     }
 }
