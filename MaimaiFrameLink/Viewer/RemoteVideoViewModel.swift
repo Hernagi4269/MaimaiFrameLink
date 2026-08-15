@@ -273,7 +273,10 @@ final class RemoteVideoViewModel: ObservableObject {
 
         let path = shouldRecord ? "api/record/start" : "api/record/stop"
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.httpMethod = "POST"
+        // The local control API is command-oriented and carries no request body. GET keeps the
+        // wire format identical to the already-proven list/status requests and avoids a second
+        // HTTP behavior path in our tiny embedded server. The camera accepts GET and POST.
+        request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = shouldRecord ? 10 : 30
 
@@ -286,13 +289,14 @@ final class RemoteVideoViewModel: ObservableObject {
             }
 
             if shouldRecord {
-                // Do not optimistically trust the POST response. Give AVCaptureMovieFileOutput
-                // a moment to enter recording state, then ask the camera for the real state.
-                try? await Task.sleep(for: .milliseconds(350))
+                // A 200 response is sent only after CameraRecorder accepted the command. Reflect
+                // that immediately, then confirm the actual state once AVCaptureMovieFileOutput
+                // has had time to transition.
+                isRemoteRecording = true
+                status = "撮影側で録画中"
+                try? await Task.sleep(for: .milliseconds(500))
                 await fetchRecordingState()
-                if isRemoteRecording {
-                    status = "撮影側で録画中"
-                } else {
+                if !isRemoteRecording {
                     status = "録画開始を確認できませんでした"
                 }
                 return

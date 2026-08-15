@@ -166,7 +166,7 @@ final class LocalVideoServer: ObservableObject {
             sendJSON(connection, code: 200, data: data)
             return
         }
-        if method == "POST", path == "/api/record/start" {
+        if (method == "POST" || method == "GET"), path == "/api/record/start" {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 let started = self.startRecordingHandler?() ?? false
@@ -175,7 +175,7 @@ final class LocalVideoServer: ObservableObject {
             }
             return
         }
-        if method == "POST", path == "/api/record/stop" {
+        if (method == "POST" || method == "GET"), path == "/api/record/stop" {
             guard let stopHandler = stopRecordingHandler else {
                 sendJSON(connection, code: 503, data: Data("{\"ok\":false}".utf8))
                 return
@@ -196,9 +196,14 @@ final class LocalVideoServer: ObservableObject {
             return
         }
         if path == "/api/record/status" {
-            let recording = recordingStateHandler?() ?? false
-            let json = recording ? "{\"recording\":true}" : "{\"recording\":false}"
-            sendJSON(connection, code: 200, data: Data(json.utf8))
+            // CameraRecorder publishes recording state on the main thread. Read it there as
+            // well so the viewer never sees a stale value immediately after a remote command.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let recording = self.recordingStateHandler?() ?? false
+                let json = recording ? "{\"recording\":true}" : "{\"recording\":false}"
+                self.sendJSON(connection, code: 200, data: Data(json.utf8))
+            }
             return
         }
         if method == "DELETE", path.hasPrefix("/api/videos/") {

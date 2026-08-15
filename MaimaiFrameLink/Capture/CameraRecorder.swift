@@ -450,37 +450,68 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
 
     @discardableResult
     func startRecording() -> Bool {
-        guard session.isRunning, !movieOutput.isRecording, !isRecording else { return false }
-        refreshHealthState()
-        if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
-            DispatchQueue.main.async { self.status = "空き容量不足で録画できません" }
-            return false
+        // All AVCaptureSession / AVCaptureMovieFileOutput state changes are serialized on
+        // sessionQueue. Remote recording can arrive while the capture session is still
+        // recovering or starting; in that case we start the session instead of simply
+        // rejecting the command.
+        let started: Bool = sessionQueue.sync {
+            if self.movieOutput.isRecording { return true }
+
+            if !self.session.isRunning {
+                self.session.startRunning()
+            }
+            guard self.session.isRunning else { return false }
+
+            if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
+                return false
+            }
+
+            self.applyRotationToMovieOutput()
+            self.configureRecordingAudioSession()
+            let url = VideoStore.shared.newRecordingURL()
+            self.movieOutput.startRecording(to: url, recordingDelegate: self)
+            return true
         }
-        applyRotationToMovieOutput()
-        configureRecordingAudioSession()
-        let url = VideoStore.shared.newRecordingURL()
-        movieOutput.startRecording(to: url, recordingDelegate: self)
-        DispatchQueue.main.async {
-            self.isRecording = true
-            self.status = "録画中"
+
+        if started {
+            isRecording = true
+            status = "録画中"
+        } else {
+            refreshHealthState()
+            if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
+                status = "空き容量不足で録画できません"
+            } else {
+                status = "録画開始に失敗しました"
+            }
         }
-        return true
+        return started
     }
 
     func stopRecording() {
-        guard movieOutput.isRecording else { return }
-        movieOutput.stopRecording()
+        sessionQueue.async { [weak self] in
+            guard let self, self.movieOutput.isRecording else { return }
+            self.movieOutput.stopRecording()
+        }
     }
 
     func stopRecording(completion: @escaping (VideoInfo?) -> Void) {
-        guard movieOutput.isRecording else {
-            completion(VideoStore.shared.latest())
-            return
-        }
         finishLock.lock()
         finishCallbacks.append(completion)
         finishLock.unlock()
-        movieOutput.stopRecording()
+
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.movieOutput.isRecording else {
+                self.finishLock.lock()
+                let callbacks = self.finishCallbacks
+                self.finishCallbacks.removeAll()
+                self.finishLock.unlock()
+                let latest = VideoStore.shared.latest()
+                DispatchQueue.main.async { callbacks.forEach { $0(latest) } }
+                return
+            }
+            self.movieOutput.stopRecording()
+        }
     }
 
     private func applyRotationToMovieOutput() {
