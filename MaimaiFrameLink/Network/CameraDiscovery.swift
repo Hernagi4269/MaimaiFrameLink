@@ -14,6 +14,7 @@ final class CameraDiscovery: ObservableObject {
     private var shouldRun = false
     private let preferredServiceKey = "MaimaiFrameLink.preferredCameraService"
     private var searchStartedAt = Date()
+    private var isConnecting = false
 
     private var preferredServiceName: String? {
         get { UserDefaults.standard.string(forKey: preferredServiceKey) }
@@ -29,12 +30,16 @@ final class CameraDiscovery: ObservableObject {
         selectedEndpointDescription = nil
         connectedServiceName = nil
         status = "撮影側を検索中…"
+        isConnecting = false
         createAndStartBrowser(label: "MaimaiFrameLink.browser")
 
         watchdog?.invalidate()
         watchdog = Timer.scheduledTimer(withTimeInterval: 6, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.shouldRun, self.baseURL == nil else { return }
+                // The P2P handshake can take several seconds in a congested arcade.
+                // Do not tear down an in-flight connection attempt from the watchdog.
+                if self.isConnecting { return }
                 let elapsed = Date().timeIntervalSince(self.searchStartedAt)
                 if elapsed > 12 {
                     self.status = "撮影側を再検索中… ローカルネットワーク権限も確認してください"
@@ -55,6 +60,7 @@ final class CameraDiscovery: ObservableObject {
         baseURL = nil
         selectedEndpointDescription = nil
         connectedServiceName = nil
+        isConnecting = false
     }
 
     func forceReconnect() {
@@ -135,14 +141,16 @@ final class CameraDiscovery: ObservableObject {
         }
 
         let description = String(describing: selected.endpoint)
-        if selectedEndpointDescription == description, baseURL != nil { return }
+        if selectedEndpointDescription == description, (baseURL != nil || isConnecting) { return }
         selectedEndpointDescription = description
         baseURL = nil
+        isConnecting = true
         status = "撮影側へP2P接続確認中…"
 
         proxy.start(remoteEndpoint: selected.endpoint) { [weak self] localURL in
             Task { @MainActor in
                 guard let self, self.shouldRun else { return }
+                self.isConnecting = false
                 if let localURL {
                     let name = self.serviceName(for: selected.endpoint)
                     self.baseURL = localURL
@@ -166,6 +174,7 @@ final class CameraDiscovery: ObservableObject {
         baseURL = nil
         selectedEndpointDescription = nil
         connectedServiceName = nil
+        isConnecting = false
         createAndStartBrowser(label: "MaimaiFrameLink.browser.restart")
     }
 

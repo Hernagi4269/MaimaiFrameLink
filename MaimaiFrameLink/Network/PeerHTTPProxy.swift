@@ -37,8 +37,16 @@ final class PeerHTTPProxy {
                             self.finishStartup(nil)
                             return
                         }
-                        let localURL = URL(string: "http://127.0.0.1:\(port.rawValue)")
-                        self.probeRemote(remoteEndpoint) { success in
+                        guard let localURL = URL(string: "http://127.0.0.1:\(port.rawValue)") else {
+                            self.finishStartup(nil)
+                            self.stopInternal()
+                            return
+                        }
+                        // Validate the exact path the viewer will use: URLSession/AVPlayer
+                        // -> loopback listener -> peer-to-peer NWConnection -> camera server.
+                        // A direct probe of the remote endpoint alone can report success even
+                        // when the local proxy path is not yet usable.
+                        self.probeThroughProxy(localURL) { success in
                             self.queue.async {
                                 self.finishStartup(success ? localURL : nil)
                                 if !success { self.stopInternal() }
@@ -88,68 +96,30 @@ final class PeerHTTPProxy {
         return parameters
     }
 
-    private func probeRemote(_ endpoint: NWEndpoint, completion: @escaping (Bool) -> Void) {
-        let remote = NWConnection(to: endpoint, using: peerParameters())
-        var completed = false
+    private func probeThroughProxy(_ localURL: URL, completion: @escaping (Bool) -> Void) {
+        var request = URLRequest(url: localURL.appendingPathComponent("api/health"))
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 12
 
-        func finish(_ success: Bool) {
-            guard !completed else { return }
-            completed = true
-            remote.cancel()
-            completion(success)
-        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 12
+        configuration.timeoutIntervalForResource = 15
+        let session = URLSession(configuration: configuration)
 
-        let timeout = DispatchWorkItem { finish(false) }
-        queue.asyncAfter(deadline: .now() + 3.0, execute: timeout)
-
-        remote.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            switch state {
-            case .ready:
-                let request = "GET /api/health HTTP/1.1\r\nHost: camera\r\nConnection: close\r\n\r\n"
-                remote.send(content: Data(request.utf8), completion: .contentProcessed { error in
-                    if error != nil {
-                        timeout.cancel()
-                        finish(false)
-                        return
-                    }
-                    self.receiveProbeResponse(remote, buffer: Data()) { success in
-                        timeout.cancel()
-                        finish(success)
-                    }
-                })
-            case .failed(let error):
-                print("PeerHTTPProxy probe failed: \(error)")
-                timeout.cancel()
-                finish(false)
-            case .cancelled:
-                break
-            default:
-                break
-            }
-        }
-        remote.start(queue: queue)
-    }
-
-    private func receiveProbeResponse(_ connection: NWConnection, buffer: Data, completion: @escaping (Bool) -> Void) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, isComplete, error in
-            guard let self else { completion(false); return }
-            var merged = buffer
-            if let data { merged.append(data) }
-
-            if let headerEnd = merged.range(of: Data("\r\n\r\n".utf8)) {
-                let headerData = merged[..<headerEnd.upperBound]
-                let header = String(decoding: headerData, as: UTF8.self)
-                completion(header.hasPrefix("HTTP/1.1 200"))
-                return
-            }
-
-            if error != nil || isComplete || merged.count >= 8192 {
+        session.dataTask(with: request) { data, response, error in
+            defer { session.invalidateAndCancel() }
+            guard error == nil,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (object["ok"] as? Bool) == true else {
                 completion(false)
                 return
             }
-            self.receiveProbeResponse(connection, buffer: merged, completion: completion)
-        }
+            completion(true)
+        }.resume()
     }
 
     private func accept(_ client: NWConnection) {

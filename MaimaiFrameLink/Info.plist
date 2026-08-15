@@ -7,8 +7,8 @@
 <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
 <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.8.0</string>
-<key>CFBundleVersion</key><string>10</string>
+<key>CFBundleShortVersionString</key><string>0.8.1</string>
+<key>CFBundleVersion</key><string>11</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>NSCameraUsageDescription</key><string>maimaiのプレイ動画を60fpsで撮影するためにカメラを使用します。</string>
 <key>NSMicrophoneUsageDescription</key><string>プレイ動画の音声を録音するためにマイクを使用します。</string>

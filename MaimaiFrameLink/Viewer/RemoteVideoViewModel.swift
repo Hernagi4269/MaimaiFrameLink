@@ -27,6 +27,7 @@ final class RemoteVideoViewModel: ObservableObject {
     private var baseURL: URL?
     private var timer: Timer?
     private var periodicToken: Any?
+    private var consecutiveConnectionFailures = 0
 
     init() {
         configurePlaybackAudio()
@@ -106,12 +107,13 @@ final class RemoteVideoViewModel: ObservableObject {
             do {
                 var request = URLRequest(url: url)
                 request.cachePolicy = .reloadIgnoringLocalCacheData
-                request.timeoutInterval = 2
+                request.timeoutInterval = 10
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     status = "撮影済み動画なし"
                     return
                 }
+                consecutiveConnectionFailures = 0
                 let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
                 let newVideos = try decoder.decode([VideoInfo].self, from: data)
                 guard !newVideos.isEmpty else {
@@ -137,7 +139,10 @@ final class RemoteVideoViewModel: ObservableObject {
                     loadCurrent()
                 }
             } catch {
-                status = "撮影側に接続中…"
+                consecutiveConnectionFailures += 1
+                status = consecutiveConnectionFailures >= 2
+                    ? "P2P通信を再確立中… 再読込も使用できます"
+                    : "撮影側との通信を確立中…"
             }
         }
     }
@@ -264,7 +269,7 @@ final class RemoteVideoViewModel: ObservableObject {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         // Stop waits for AVCaptureMovieFileOutput to finish writing the file.
-        request.timeoutInterval = shouldRecord ? 4 : 20
+        request.timeoutInterval = shouldRecord ? 10 : 30
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
@@ -317,7 +322,7 @@ final class RemoteVideoViewModel: ObservableObject {
         guard let baseURL else { return }
         do {
             var request = URLRequest(url: baseURL.appendingPathComponent("api/record/status"))
-            request.timeoutInterval = 2
+            request.timeoutInterval = 10
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
