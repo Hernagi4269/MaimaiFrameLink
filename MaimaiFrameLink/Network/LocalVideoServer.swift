@@ -8,7 +8,7 @@ final class LocalVideoServer: ObservableObject {
     private var restartWorkItem: DispatchWorkItem?
     private var shouldRun = false
     private let queue = DispatchQueue(label: "MaimaiFrameLink.http")
-    var startRecordingHandler: ((@escaping (Bool, String?) -> Void) -> Void)?
+    var startRecordingHandler: (() -> Bool)?
     var stopRecordingHandler: ((@escaping (VideoInfo?) -> Void) -> Void)?
     var recordingStateHandler: (() -> Bool)?
 
@@ -166,20 +166,17 @@ final class LocalVideoServer: ObservableObject {
             sendJSON(connection, code: 200, data: data)
             return
         }
-        if (method == "POST" || method == "GET"), path == "/api/record/start" {
-            guard let startHandler = startRecordingHandler else {
-                sendJSON(connection, code: 503, data: Data("{\"ok\":false,\"recording\":false,\"error\":\"start handler unavailable\"}".utf8))
-                return
-            }
+        if method == "POST", path == "/api/record/start" {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                startHandler { [weak self] started, error in
-                    guard let self else { return }
-                    var object: [String: Any] = ["ok": started, "recording": started]
-                    if let error, !error.isEmpty { object["error"] = error }
-                    let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{\"ok\":false}".utf8)
-                    self.sendJSON(connection, code: started ? 200 : 409, data: data)
-                }
+                let started = self.startRecordingHandler?() ?? false
+                let object: [String: Any] = [
+                    "ok": started,
+                    "recording": started,
+                    "error": started ? "" : "camera rejected recording start"
+                ]
+                let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{\"ok\":false}".utf8)
+                self.sendJSON(connection, code: started ? 200 : 409, data: data)
             }
             return
         }

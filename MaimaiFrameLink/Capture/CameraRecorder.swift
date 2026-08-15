@@ -78,10 +78,6 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     private var observerTokens: [NSObjectProtocol] = []
     private let finishLock = NSLock()
     private var finishCallbacks: [(VideoInfo?) -> Void] = []
-    private let startLock = NSLock()
-    private var startCallbacks: [(Bool, String?) -> Void] = []
-    private var startTimeoutWorkItem: DispatchWorkItem?
-    @Published private(set) var isStartingRecording = false
     @Published private(set) var lastRecordingError = ""
     private var pressureTimer: DispatchSourceTimer?
 
@@ -214,7 +210,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             return
         }
         session.addOutput(movieOutput)
-        movieOutput.movieFragmentInterval = CMTime(seconds: 5, preferredTimescale: 600)
+        movieOutput.movieFragmentInterval = .invalid
 
         configureMovieOutput()
 
@@ -453,100 +449,39 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
 
     @discardableResult
     func startRecording() -> Bool {
-        beginRecordingIfPossible()
-    }
+        guard !isRecording, !movieOutput.isRecording else { return false }
+        refreshHealthState()
 
-    func startRecording(completion: @escaping (Bool, String?) -> Void) {
-        startLock.lock()
-        startCallbacks.append(completion)
-        startLock.unlock()
-
-        if isRecording || movieOutput.isRecording {
-            resolveStartCallbacks(success: true, error: nil)
-            return
-        }
-
-        let accepted = beginRecordingIfPossible()
-        if !accepted {
-            resolveStartCallbacks(success: false, error: lastRecordingError.isEmpty ? "録画開始条件を満たせません" : lastRecordingError)
-        }
-    }
-
-    @discardableResult
-    private func beginRecordingIfPossible() -> Bool {
-        if isRecording || isStartingRecording || movieOutput.isRecording { return true }
-
-        isStartingRecording = true
-        status = "録画開始中…"
-        lastRecordingError = ""
-
-        let accepted: Bool = sessionQueue.sync {
-            if !self.session.isRunning {
-                self.session.startRunning()
-            }
-            guard self.session.isRunning else { return false }
-
-            if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
-                return false
-            }
-
-            self.applyRotationToMovieOutput()
-            self.configureRecordingAudioSession()
-            let url = VideoStore.shared.newRecordingURL()
-            self.movieOutput.startRecording(to: url, recordingDelegate: self)
-            return true
-        }
-
-        if !accepted {
-            isStartingRecording = false
-            refreshHealthState()
-            if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
-                lastRecordingError = "空き容量不足"
-                status = "空き容量不足で録画できません"
-            } else {
-                lastRecordingError = "Capture Sessionを開始できません"
-                status = "録画開始に失敗しました"
-            }
+        if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
+            lastRecordingError = "空き容量不足"
+            status = "空き容量不足で録画できません"
             return false
         }
 
-        // Do not claim that recording has started until AVFoundation calls didStart.
-        // If neither didStart nor didFinish arrives, fail the remote command rather than
-        // leaving the viewer in a false 'recording' state.
-        startTimeoutWorkItem?.cancel()
-        let timeout = DispatchWorkItem { [weak self] in
-            guard let self, self.isStartingRecording, !self.isRecording else { return }
-            DispatchQueue.main.async {
-                self.isStartingRecording = false
-                self.lastRecordingError = "録画開始確認がタイムアウトしました"
-                self.status = self.lastRecordingError
-                self.resolveStartCallbacks(success: false, error: self.lastRecordingError)
-            }
+        // Keep remote recording on the exact same path as the on-device shutter.
+        // The capture session is normally kept running while CameraHomeView is active.
+        // If iOS interrupted it temporarily, restore it before starting the movie output.
+        if !session.isRunning {
+            session.startRunning()
         }
-        startTimeoutWorkItem = timeout
-        sessionQueue.asyncAfter(deadline: .now() + 4.0, execute: timeout)
+        guard session.isRunning else {
+            lastRecordingError = "Capture Sessionを開始できません"
+            status = "録画開始に失敗しました"
+            return false
+        }
+
+        applyRotationToMovieOutput()
+        configureRecordingAudioSession()
+        let url = VideoStore.shared.newRecordingURL()
+        movieOutput.startRecording(to: url, recordingDelegate: self)
+
+        // This mirrors the on-device shutter behavior that proved stable before the
+        // remote-record handshake was added. AVFoundation remains the source of truth
+        // for finalization in didFinishRecording.
+        isRecording = true
+        lastRecordingError = ""
+        status = "録画中"
         return true
-    }
-
-    private func resolveStartCallbacks(success: Bool, error: String?) {
-        startLock.lock()
-        let callbacks = startCallbacks
-        startCallbacks.removeAll()
-        startLock.unlock()
-        callbacks.forEach { $0(success, error) }
-    }
-
-    func fileOutput(_ output: AVCaptureFileOutput,
-                    didStartRecordingTo fileURL: URL,
-                    from connections: [AVCaptureConnection]) {
-        startTimeoutWorkItem?.cancel()
-        DispatchQueue.main.async {
-            self.isStartingRecording = false
-            self.isRecording = true
-            self.lastRecordingError = ""
-            self.status = "録画中"
-            self.resolveStartCallbacks(success: true, error: nil)
-        }
     }
 
     func stopRecording() {
@@ -605,13 +540,10 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         finishLock.unlock()
 
         DispatchQueue.main.async {
-            self.startTimeoutWorkItem?.cancel()
-            self.isStartingRecording = false
             self.isRecording = false
             self.lastFinishedAt = Date()
             if !finishedSuccessfully {
                 self.lastRecordingError = error?.localizedDescription ?? "録画が開始直後に終了しました"
-                self.resolveStartCallbacks(success: false, error: self.lastRecordingError)
             }
             if finishedSuccessfully, latest != nil {
                 self.status = "保存完了"

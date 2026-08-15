@@ -273,19 +273,16 @@ final class RemoteVideoViewModel: ObservableObject {
 
         let path = shouldRecord ? "api/record/start" : "api/record/stop"
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        // The local control API is command-oriented and carries no request body. GET keeps the
-        // wire format identical to the already-proven list/status requests and avoids a second
-        // HTTP behavior path in our tiny embedded server. The camera accepts GET and POST.
-        request.httpMethod = "GET"
+        request.httpMethod = "POST"
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = shouldRecord ? 10 : 30
+        request.timeoutInterval = shouldRecord ? 8 : 30
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let message = object["error"] as? String, !message.isEmpty {
-                    status = "録画開始失敗: \(message)"
+                    status = "録画操作失敗: \(message)"
                 } else {
                     status = "録画操作に失敗しました"
                 }
@@ -294,22 +291,12 @@ final class RemoteVideoViewModel: ObservableObject {
             }
 
             if shouldRecord {
-                // A 200 response is sent only after CameraRecorder accepted the command. Reflect
-                // that immediately, then confirm the actual state once AVCaptureMovieFileOutput
-                // has had time to transition.
                 isRemoteRecording = true
                 status = "撮影側で録画中"
-                try? await Task.sleep(for: .milliseconds(500))
-                await fetchRecordingState()
-                if !isRemoteRecording {
-                    status = "録画開始を確認できませんでした"
-                }
                 return
             }
 
             isRemoteRecording = false
-
-            // The camera responds only after AVCaptureMovieFileOutput has finalized the MP4.
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
             if let stop = try? decoder.decode(RecordingStopResponse.self, from: data),
                let latest = stop.latest {

@@ -71,7 +71,7 @@ struct CameraHomeView: View {
             UIApplication.shared.isIdleTimerDisabled = true
             recorder.setCaptureOrientation(selectedOrientation)
             recorder.refreshHealthState()
-            server.startRecordingHandler = { completion in recorder.startRecording(completion: completion) }
+            server.startRecordingHandler = { recorder.startRecording() }
             server.stopRecordingHandler = { completion in recorder.stopRecording(completion: completion) }
             server.recordingStateHandler = { recorder.isRecording }
             server.start()
