@@ -567,7 +567,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
                 label = "非常に高い"; warning = "カメラ負荷が限界です。動画保護のため録画を停止します"; shouldStopRecording = true
             case .shutdown:
                 label = "停止レベル"; warning = "カメラがシステム負荷で停止しました"; shouldStopRecording = true
-            @unknown default:
+            default:
                 label = "不明"; warning = nil; shouldStopRecording = false
             }
             DispatchQueue.main.async {
