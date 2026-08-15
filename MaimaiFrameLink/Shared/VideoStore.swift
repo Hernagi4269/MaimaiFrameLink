@@ -25,8 +25,10 @@ enum AppIdentity {
     }
 
     static var serviceName: String {
-        let compact = cameraID.replacingOccurrences(of: "-", with: "")
-        return "MaimaiCamera-\(compact.prefix(8))"
+        // Reliability-first: advertise one stable Bonjour name. This avoids
+        // discovery filters/pairing state becoming a reason the two phones
+        // cannot find each other in the field.
+        "MaimaiCamera"
     }
 }
 

@@ -1,195 +1,192 @@
 import Foundation
-import Network
 
+/// Simple Bonjour discovery tuned for reliability rather than strict pairing.
+/// NetServiceBrowser/NetService both opt in to Apple's peer-to-peer path, while
+/// still working on ordinary Wi-Fi and Personal Hotspot networks.
 @MainActor
-final class CameraDiscovery: ObservableObject {
+final class CameraDiscovery: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
     @Published private(set) var baseURL: URL?
     @Published private(set) var status = "撮影側を検索中…"
     @Published private(set) var connectedServiceName: String?
 
-    private var browser: NWBrowser?
-    private let proxy = PeerHTTPProxy()
-    private var selectedEndpointDescription: String?
-    private var watchdog: Timer?
+    private let browser = NetServiceBrowser()
+    private var services: [NetService] = []
     private var shouldRun = false
-    private let preferredServiceKey = "MaimaiFrameLink.preferredCameraService"
-    private var searchStartedAt = Date()
-    private var isConnecting = false
+    private var restartWorkItem: DispatchWorkItem?
+    private var watchdog: Timer?
+    private var connectingService: NetService?
 
-    private var preferredServiceName: String? {
-        get { UserDefaults.standard.string(forKey: preferredServiceKey) }
-        set { UserDefaults.standard.set(newValue, forKey: preferredServiceKey) }
+    override init() {
+        super.init()
+        browser.delegate = self
+        browser.includesPeerToPeer = true
     }
 
     func start() {
         shouldRun = true
-        searchStartedAt = Date()
-        stopBrowserOnly()
-        proxy.stop()
+        restartWorkItem?.cancel()
+        restartWorkItem = nil
+        resetResolvedServices()
         baseURL = nil
-        selectedEndpointDescription = nil
         connectedServiceName = nil
         status = "撮影側を検索中…"
-        isConnecting = false
-        createAndStartBrowser(label: "MaimaiFrameLink.browser")
+
+        browser.stop()
+        browser.searchForServices(ofType: "_maimailens._tcp.", inDomain: "local.")
 
         watchdog?.invalidate()
-        watchdog = Timer.scheduledTimer(withTimeInterval: 6, repeats: true) { [weak self] _ in
+        watchdog = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.shouldRun, self.baseURL == nil else { return }
-                // The P2P handshake can take several seconds in a congested arcade.
-                // Do not tear down an in-flight connection attempt from the watchdog.
-                if self.isConnecting { return }
-                let elapsed = Date().timeIntervalSince(self.searchStartedAt)
-                if elapsed > 12 {
-                    self.status = "撮影側を再検索中… ローカルネットワーク権限も確認してください"
-                } else {
-                    self.status = "P2P撮影側を再検索中…"
+                // Do not continuously tear down an active resolve. If nothing is
+                // resolving, restart Bonjour discovery in the simplest possible way.
+                if self.connectingService == nil {
+                    self.status = "撮影側を再検索中…"
+                    self.restartSearch()
                 }
-                self.restartBrowser()
             }
         }
     }
 
     func stop() {
         shouldRun = false
+        restartWorkItem?.cancel()
+        restartWorkItem = nil
         watchdog?.invalidate()
         watchdog = nil
-        stopBrowserOnly()
-        proxy.stop()
+        browser.stop()
+        resetResolvedServices()
         baseURL = nil
-        selectedEndpointDescription = nil
         connectedServiceName = nil
-        isConnecting = false
     }
 
     func forceReconnect() {
         guard shouldRun else { start(); return }
-        searchStartedAt = Date()
-        restartBrowser()
+        baseURL = nil
+        connectedServiceName = nil
+        status = "撮影側を再検索中…"
+        restartSearch()
     }
 
+    /// Pairing restrictions were intentionally removed. This remains for UI
+    /// compatibility and simply performs a fresh discovery.
     func forgetPreferredCamera() {
-        preferredServiceName = nil
         forceReconnect()
     }
 
-    private func createAndStartBrowser(label: String) {
-        let parameters = NWParameters.tcp
-        parameters.includePeerToPeer = true
-        let newBrowser = NWBrowser(for: .bonjour(type: "_maimailens._tcp", domain: "local."), using: parameters)
-        browser = newBrowser
-
-        newBrowser.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in
-                guard let self, self.shouldRun else { return }
-                switch state {
-                case .ready:
-                    self.status = self.baseURL == nil ? "P2P撮影側を検索中…" : self.status
-                case .waiting(let error):
-                    print("NWBrowser waiting: \(error)")
-                    self.status = "撮影側への接続待機中…"
-                case .failed(let error):
-                    print("NWBrowser failed: \(error)")
-                    self.status = "再検索中…"
-                    self.scheduleRestart()
-                case .cancelled:
-                    break
-                default:
-                    break
-                }
-            }
-        }
-
-        newBrowser.browseResultsChangedHandler = { [weak self] results, _ in
-            Task { @MainActor in self?.handle(results: results) }
-        }
-        newBrowser.start(queue: DispatchQueue(label: label))
+    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+        status = "撮影側を検索中…"
     }
 
-    private func serviceName(for endpoint: NWEndpoint) -> String? {
-        if case let .service(name, _, _, _) = endpoint { return name }
-        return nil
-    }
-
-    private func handle(results: Set<NWBrowser.Result>) {
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         guard shouldRun else { return }
-        let serviceResults = results.filter {
-            if case .service = $0.endpoint { return true }
-            return false
-        }
+        guard !services.contains(where: { $0 === service }) else { return }
 
-        guard !serviceResults.isEmpty else {
-            if baseURL != nil {
-                baseURL = nil
-                proxy.stop()
-            }
-            selectedEndpointDescription = nil
+        services.append(service)
+        service.includesPeerToPeer = true
+        service.delegate = self
+
+        // Reliability-first behavior: the first Maimai camera found is accepted.
+        // There is no device-ID filtering or preferred-device gate.
+        if baseURL == nil, connectingService == nil {
+            connectingService = service
+            status = "撮影側を発見・接続中…"
+            service.resolve(withTimeout: 10)
+        }
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        services.removeAll { $0 === service }
+        if connectingService === service {
+            connectingService = nil
+        }
+        if connectedServiceName == service.name {
+            baseURL = nil
             connectedServiceName = nil
-            status = "撮影側を検索中…"
+            status = "撮影側が切断されました・再検索中…"
+            scheduleRestart()
+        }
+    }
+
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+        print("Bonjour search failed: \(errorDict)")
+        status = "検索を再開中…"
+        scheduleRestart()
+    }
+
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        guard shouldRun else { return }
+        guard let host = sender.hostName, sender.port > 0 else {
+            connectingService = nil
+            scheduleRestart()
             return
         }
 
-        let selected: NWBrowser.Result
-        if let preferredServiceName,
-           let preferred = serviceResults.first(where: { serviceName(for: $0.endpoint) == preferredServiceName }) {
-            selected = preferred
-        } else {
-            selected = serviceResults.sorted {
-                (serviceName(for: $0.endpoint) ?? "") < (serviceName(for: $1.endpoint) ?? "")
-            }.first!
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = host
+        components.port = sender.port
+
+        guard let url = components.url else {
+            connectingService = nil
+            scheduleRestart()
+            return
         }
 
-        let description = String(describing: selected.endpoint)
-        if selectedEndpointDescription == description, (baseURL != nil || isConnecting) { return }
-        selectedEndpointDescription = description
-        baseURL = nil
-        isConnecting = true
-        status = "撮影側へP2P接続確認中…"
+        connectingService = nil
+        baseURL = url
+        connectedServiceName = sender.name
+        status = "接続済み: \(sender.name)"
+    }
 
-        proxy.start(remoteEndpoint: selected.endpoint) { [weak self] localURL in
-            Task { @MainActor in
-                guard let self, self.shouldRun else { return }
-                self.isConnecting = false
-                if let localURL {
-                    let name = self.serviceName(for: selected.endpoint)
-                    self.baseURL = localURL
-                    self.connectedServiceName = name
-                    if let name { self.preferredServiceName = name }
-                    self.status = "接続済み（P2P実通信確認済み）"
-                } else {
-                    self.baseURL = nil
-                    self.connectedServiceName = nil
-                    self.status = "P2P実通信に失敗・再試行中…"
-                    self.scheduleRestart()
-                }
-            }
+    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+        print("Bonjour resolve failed: \(errorDict)")
+        if connectingService === sender {
+            connectingService = nil
+        }
+        guard shouldRun, baseURL == nil else { return }
+
+        // Try another already-discovered service before restarting the browser.
+        if let next = services.first(where: { $0 !== sender }) {
+            connectingService = next
+            next.includesPeerToPeer = true
+            next.delegate = self
+            status = "別の撮影側へ接続中…"
+            next.resolve(withTimeout: 10)
+        } else {
+            status = "撮影側を再検索中…"
+            scheduleRestart()
         }
     }
 
-    private func restartBrowser() {
+    private func restartSearch() {
         guard shouldRun else { return }
-        stopBrowserOnly()
-        proxy.stop()
+        browser.stop()
+        resetResolvedServices()
         baseURL = nil
-        selectedEndpointDescription = nil
         connectedServiceName = nil
-        isConnecting = false
-        createAndStartBrowser(label: "MaimaiFrameLink.browser.restart")
+        browser.searchForServices(ofType: "_maimailens._tcp.", inDomain: "local.")
     }
 
     private func scheduleRestart() {
         guard shouldRun else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self, self.shouldRun, self.baseURL == nil else { return }
-            self.restartBrowser()
+        restartWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                guard let self, self.shouldRun, self.baseURL == nil else { return }
+                self.restartSearch()
+            }
         }
+        restartWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: item)
     }
 
-    private func stopBrowserOnly() {
-        browser?.stateUpdateHandler = nil
-        browser?.browseResultsChangedHandler = nil
-        browser?.cancel()
-        browser = nil
+    private func resetResolvedServices() {
+        connectingService = nil
+        services.forEach {
+            $0.delegate = nil
+            $0.stop()
+        }
+        services.removeAll()
     }
 }
