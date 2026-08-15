@@ -47,10 +47,10 @@ struct ViewerHomeView: View {
         }
         .onDisappear {
             discovery.stop()
-            vm.connect(baseURL: nil)
+            vm.connect(baseURL: nil, controlHost: nil, controlPort: nil)
         }
         .onChange(of: discovery.baseURL) { _, newValue in
-            vm.connect(baseURL: newValue)
+            vm.connect(baseURL: newValue, controlHost: discovery.controlHost, controlPort: discovery.controlPort)
         }
         .confirmationDialog("この動画を撮影側iPhoneから削除しますか？", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
             Button("削除", role: .destructive) {
