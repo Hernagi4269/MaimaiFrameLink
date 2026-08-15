@@ -283,7 +283,12 @@ final class RemoteVideoViewModel: ObservableObject {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                status = "録画操作に失敗しました"
+                if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let message = object["error"] as? String, !message.isEmpty {
+                    status = "録画開始失敗: \(message)"
+                } else {
+                    status = "録画操作に失敗しました"
+                }
                 await fetchRecordingState()
                 return
             }

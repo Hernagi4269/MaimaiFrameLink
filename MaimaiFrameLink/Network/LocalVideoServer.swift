@@ -8,7 +8,7 @@ final class LocalVideoServer: ObservableObject {
     private var restartWorkItem: DispatchWorkItem?
     private var shouldRun = false
     private let queue = DispatchQueue(label: "MaimaiFrameLink.http")
-    var startRecordingHandler: (() -> Bool)?
+    var startRecordingHandler: ((@escaping (Bool, String?) -> Void) -> Void)?
     var stopRecordingHandler: ((@escaping (VideoInfo?) -> Void) -> Void)?
     var recordingStateHandler: (() -> Bool)?
 
@@ -167,11 +167,19 @@ final class LocalVideoServer: ObservableObject {
             return
         }
         if (method == "POST" || method == "GET"), path == "/api/record/start" {
+            guard let startHandler = startRecordingHandler else {
+                sendJSON(connection, code: 503, data: Data("{\"ok\":false,\"recording\":false,\"error\":\"start handler unavailable\"}".utf8))
+                return
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                let started = self.startRecordingHandler?() ?? false
-                let body = started ? "{\"ok\":true,\"recording\":true}" : "{\"ok\":false,\"recording\":false}"
-                self.sendJSON(connection, code: started ? 200 : 409, data: Data(body.utf8))
+                startHandler { [weak self] started, error in
+                    guard let self else { return }
+                    var object: [String: Any] = ["ok": started, "recording": started]
+                    if let error, !error.isEmpty { object["error"] = error }
+                    let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{\"ok\":false}".utf8)
+                    self.sendJSON(connection, code: started ? 200 : 409, data: data)
+                }
             }
             return
         }
