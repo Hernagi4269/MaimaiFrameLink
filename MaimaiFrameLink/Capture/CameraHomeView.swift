@@ -13,10 +13,7 @@ struct CameraHomeView: View {
     @StateObject private var recorder = CameraRecorder()
     @StateObject private var server = LocalVideoServer()
     @AppStorage("captureOrientation") private var storedOrientation = ManualCaptureOrientation.portrait.rawValue
-    @AppStorage("dimScreenWhileRecording") private var dimScreenWhileRecording = true
     @State private var showSettings = false
-    @State private var showPreviewWhileRecording = false
-    @Environment(\.scenePhase) private var scenePhase
     let onChangeRole: () -> Void
 
     private var selectedOrientation: ManualCaptureOrientation {
@@ -35,25 +32,12 @@ struct CameraHomeView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                if recorder.isRecording && dimScreenWhileRecording && !showPreviewWhileRecording {
-                    Color.black.ignoresSafeArea()
-                    VStack(spacing: 8) {
-                        Image(systemName: "moon.zzz.fill")
-                            .font(.title2)
-                        Text("省電力撮影中")
-                            .font(.headline)
-                        Button("プレビューを一時表示") { showPreviewWhileRecording = true }
-                            .buttonStyle(.bordered)
-                    }
-                    .foregroundStyle(.secondary)
-                } else {
-                    CameraPreview(
-                        session: recorder.session,
-                        orientation: selectedOrientation,
-                        onTapFocus: recorder.focus(at:)
-                    )
-                    .ignoresSafeArea()
-                }
+                CameraPreview(
+                    session: recorder.session,
+                    orientation: selectedOrientation,
+                    onTapFocus: recorder.focus(at:)
+                )
+                .ignoresSafeArea()
 
                 if landscape {
                     landscapeCameraChrome
@@ -68,33 +52,13 @@ struct CameraHomeView: View {
                 .presentationDragIndicator(.visible)
         }
         .onAppear {
-            UIApplication.shared.isIdleTimerDisabled = true
             recorder.setCaptureOrientation(selectedOrientation)
-            recorder.refreshHealthState()
             server.startRecordingHandler = { recorder.startRecording() }
-            server.stopRecordingHandler = { completion in recorder.stopRecording(completion: completion) }
+            server.stopRecordingHandler = { recorder.stopRecording() }
             server.recordingStateHandler = { recorder.isRecording }
             server.start()
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                // Low Power Mode forces a short system auto-lock, so re-assert this whenever
-                // the camera app returns to foreground.
-                UIApplication.shared.isIdleTimerDisabled = true
-                recorder.refreshHealthState()
-            }
-        }
-        .onChange(of: recorder.isRecording) { _, recording in
-            if recording {
-                showPreviewWhileRecording = false
-            } else {
-                showPreviewWhileRecording = false
-            }
-        }
-        .onDisappear {
-            UIApplication.shared.isIdleTimerDisabled = false
-            server.stop()
-        }
+        .onDisappear { server.stop() }
     }
 
     private var landscapeCameraChrome: some View {
@@ -165,18 +129,6 @@ struct CameraHomeView: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-            }
-            if !recorder.lastRecordingError.isEmpty && !recorder.isRecording {
-                Text(recorder.lastRecordingError)
-                    .font(.caption2.bold())
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-            }
-            if !recorder.healthWarning.isEmpty {
-                Text(recorder.healthWarning)
-                    .font(.caption2.bold())
-                    .foregroundStyle(.yellow)
-                    .lineLimit(2)
             }
         }
         .padding(.horizontal, 10)
@@ -303,39 +255,8 @@ struct CameraHomeView: View {
                     }
                 }
 
-                Section("安定性・電力") {
-                    HStack {
-                        Label("低電力モード", systemImage: "battery.25")
-                        Spacer()
-                        Text(recorder.lowPowerMode ? "ON・撮影中スリープ防止" : "OFF")
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Label("ストレージ", systemImage: "internaldrive")
-                        Spacer()
-                        Text(recorder.freeSpaceLabel).foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Label("カメラ負荷", systemImage: "thermometer.medium")
-                        Spacer()
-                        Text(recorder.systemPressureLabel).foregroundStyle(.secondary)
-                    }
-                    Toggle("録画中は省電力表示にする", isOn: $dimScreenWhileRecording)
-                    Text("録画中はカメラプレビュー描画を止めて黒い省電力画面にします。録画処理と1080p/60fpsの品質には影響しません。必要な時だけ一時的にプレビューを表示できます。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if !recorder.healthWarning.isEmpty {
-                        Label(recorder.healthWarning, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
-                    }
-                    Text("撮影側画面を開いている間は、低電力モードでも自動スリープを無効化します。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 Section {
                     Button("役割を変更", action: onChangeRole)
-                        .disabled(recorder.isRecording)
                 }
             }
             .navigationTitle("撮影設定")

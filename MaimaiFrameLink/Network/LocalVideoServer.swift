@@ -8,8 +8,8 @@ final class LocalVideoServer: ObservableObject {
     private var restartWorkItem: DispatchWorkItem?
     private var shouldRun = false
     private let queue = DispatchQueue(label: "MaimaiFrameLink.http")
-    var startRecordingHandler: (() -> Bool)?
-    var stopRecordingHandler: ((@escaping (VideoInfo?) -> Void) -> Void)?
+    var startRecordingHandler: (() -> Void)?
+    var stopRecordingHandler: (() -> Void)?
     var recordingStateHandler: (() -> Bool)?
 
     func start() {
@@ -44,7 +44,7 @@ final class LocalVideoServer: ObservableObject {
             parameters.includePeerToPeer = true
 
             let newListener = try NWListener(using: parameters, on: .any)
-            newListener.service = NWListener.Service(name: AppIdentity.serviceName, type: "_maimailens._tcp")
+            newListener.service = NWListener.Service(name: "MaimaiCamera", type: "_maimailens._tcp")
             newListener.stateUpdateHandler = { [weak self, weak newListener] state in
                 guard let self else { return }
                 switch state {
@@ -139,20 +139,6 @@ final class LocalVideoServer: ObservableObject {
         let method = String(parts[0])
         let path = String(parts[1]).removingPercentEncoding ?? String(parts[1])
 
-        if path == "/api/health" {
-            let recording = recordingStateHandler?() ?? false
-            let object: [String: Any] = [
-                "ok": true,
-                "protocolVersion": 2,
-                "cameraID": AppIdentity.cameraID,
-                "serviceName": AppIdentity.serviceName,
-                "recording": recording
-            ]
-            let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{\"ok\":true}".utf8)
-            sendJSON(connection, code: 200, data: data)
-            return
-        }
-
         if path == "/api/latest" {
             guard let latest = VideoStore.shared.latest(),
                   let json = try? JSONEncoder.iso8601.encode(latest) else {
@@ -167,48 +153,19 @@ final class LocalVideoServer: ObservableObject {
             return
         }
         if method == "POST", path == "/api/record/start" {
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let started = self.startRecordingHandler?() ?? false
-                let object: [String: Any] = [
-                    "ok": started,
-                    "recording": started,
-                    "error": started ? "" : "camera rejected recording start"
-                ]
-                let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{\"ok\":false}".utf8)
-                self.sendJSON(connection, code: started ? 200 : 409, data: data)
-            }
+            DispatchQueue.main.async { [weak self] in self?.startRecordingHandler?() }
+            sendJSON(connection, code: 200, data: Data("{\"ok\":true}".utf8))
             return
         }
-        if (method == "POST" || method == "GET"), path == "/api/record/stop" {
-            guard let stopHandler = stopRecordingHandler else {
-                sendJSON(connection, code: 503, data: Data("{\"ok\":false}".utf8))
-                return
-            }
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                stopHandler { [weak self] latest in
-                    guard let self else { return }
-                    var object: [String: Any] = ["ok": true, "recording": false]
-                    if let latest, let latestData = try? JSONEncoder.iso8601.encode(latest),
-                       let latestObject = try? JSONSerialization.jsonObject(with: latestData) {
-                        object["latest"] = latestObject
-                    }
-                    let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{\"ok\":true}".utf8)
-                    self.sendJSON(connection, code: 200, data: data)
-                }
-            }
+        if method == "POST", path == "/api/record/stop" {
+            DispatchQueue.main.async { [weak self] in self?.stopRecordingHandler?() }
+            sendJSON(connection, code: 200, data: Data("{\"ok\":true}".utf8))
             return
         }
         if path == "/api/record/status" {
-            // CameraRecorder publishes recording state on the main thread. Read it there as
-            // well so the viewer never sees a stale value immediately after a remote command.
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let recording = self.recordingStateHandler?() ?? false
-                let json = recording ? "{\"recording\":true}" : "{\"recording\":false}"
-                self.sendJSON(connection, code: 200, data: Data(json.utf8))
-            }
+            let recording = recordingStateHandler?() ?? false
+            let json = recording ? "{\"recording\":true}" : "{\"recording\":false}"
+            sendJSON(connection, code: 200, data: Data(json.utf8))
             return
         }
         if method == "DELETE", path.hasPrefix("/api/videos/") {
@@ -278,14 +235,7 @@ final class LocalVideoServer: ObservableObject {
     }
 
     private func sendJSON(_ connection: NWConnection, code: Int, data: Data) {
-        let reason: String
-        switch code {
-        case 200: reason = "OK"
-        case 404: reason = "Not Found"
-        case 409: reason = "Conflict"
-        case 503: reason = "Service Unavailable"
-        default: reason = "Error"
-        }
+        let reason = code == 200 ? "OK" : "Not Found"
         let header = "HTTP/1.1 \(code) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(data.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
         send(connection, data: Data(header.utf8) + data)
     }

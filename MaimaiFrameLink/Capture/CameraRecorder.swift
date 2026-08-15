@@ -65,81 +65,16 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     @Published private(set) var isAEAFLocked = false
     @Published private(set) var audioEnabled = false
     @Published private(set) var lastRecordingVerification = ""
-    @Published private(set) var healthWarning = ""
-    @Published private(set) var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-    @Published private(set) var freeSpaceLabel = ""
-    @Published private(set) var systemPressureLabel = "正常"
-    @Published private(set) var lastRecordingError = ""
 
     let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let sessionQueue = DispatchQueue(label: "MaimaiFrameLink.capture")
     private var videoDevice: AVCaptureDevice?
     private var videoInput: AVCaptureDeviceInput?
-    private var observerTokens: [NSObjectProtocol] = []
-    private let finishLock = NSLock()
-    private var finishCallbacks: [(VideoInfo?) -> Void] = []
 
     override init() {
         super.init()
-        installStabilityObservers()
-        refreshHealthState()
         requestPermissionsAndConfigure()
-    }
-
-    deinit {
-        for token in observerTokens { NotificationCenter.default.removeObserver(token) }
-    }
-
-    private func installStabilityObservers() {
-        let center = NotificationCenter.default
-        observerTokens.append(center.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.refreshHealthState()
-        })
-        observerTokens.append(center.addObserver(forName: .NSProcessInfoPowerStateDidChange, object: nil, queue: .main) { [weak self] _ in
-            self?.refreshHealthState()
-        })
-        observerTokens.append(center.addObserver(forName: .AVCaptureSessionWasInterrupted, object: session, queue: .main) { [weak self] note in
-            guard let self else { return }
-            self.healthWarning = "カメラが一時中断されました"
-            self.status = "撮影中断"
-        })
-        observerTokens.append(center.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            self.refreshHealthState()
-            if !self.isRecording { self.status = self.is60FPS ? "撮影可能" : self.status }
-        })
-        observerTokens.append(center.addObserver(forName: .AVCaptureSessionRuntimeError, object: session, queue: .main) { [weak self] note in
-            guard let self else { return }
-            let message = (note.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.localizedDescription ?? "不明なエラー"
-            self.healthWarning = "カメラエラー: \(message)"
-        })
-        observerTokens.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            if self.isRecording { self.healthWarning = "音声入出力が変更されました。録音状態を確認してください" }
-        })
-    }
-
-    func refreshHealthState() {
-        lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
-        if let bytes = VideoStore.shared.availableCapacityBytes() {
-            let gb = Double(bytes) / 1_073_741_824.0
-            freeSpaceLabel = String(format: "空き %.1fGB", gb)
-            if bytes < 500_000_000 {
-                healthWarning = "ストレージ残量が少なすぎます"
-            } else if bytes < 2_000_000_000, healthWarning.isEmpty {
-                healthWarning = "ストレージ残量が少なくなっています"
-            }
-        }
-
-        switch ProcessInfo.processInfo.thermalState {
-        case .serious:
-            healthWarning = "端末が高温です。60fps維持が難しくなる可能性があります"
-        case .critical:
-            healthWarning = "端末が非常に高温です。録画停止の可能性があります"
-        default:
-            if healthWarning.contains("高温") { healthWarning = "" }
-        }
     }
 
     private func requestPermissionsAndConfigure() {
@@ -434,23 +369,10 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         applyRotationToMovieOutput()
     }
 
-    func toggleRecording() {
-        if isRecording {
-            stopRecording()
-        } else {
-            _ = startRecording()
-        }
-    }
+    func toggleRecording() { isRecording ? stopRecording() : startRecording() }
 
-    @discardableResult
-    func startRecording() -> Bool {
-        guard session.isRunning, !movieOutput.isRecording, !isRecording else { return false }
-        lastRecordingError = ""
-        refreshHealthState()
-        if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
-            DispatchQueue.main.async { self.status = "空き容量不足で録画できません" }
-            return false
-        }
+    func startRecording() {
+        guard session.isRunning, !movieOutput.isRecording else { return }
         applyRotationToMovieOutput()
         configureRecordingAudioSession()
         let url = VideoStore.shared.newRecordingURL()
@@ -459,22 +381,10 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             self.isRecording = true
             self.status = "録画中"
         }
-        return true
     }
 
     func stopRecording() {
         guard movieOutput.isRecording else { return }
-        movieOutput.stopRecording()
-    }
-
-    func stopRecording(completion: @escaping (VideoInfo?) -> Void) {
-        guard movieOutput.isRecording else {
-            completion(VideoStore.shared.latest())
-            return
-        }
-        finishLock.lock()
-        finishCallbacks.append(completion)
-        finishLock.unlock()
         movieOutput.stopRecording()
     }
 
@@ -486,20 +396,11 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
 
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection], error: Error?) {
-        let latest = error == nil ? VideoStore.shared.latest() : nil
-        finishLock.lock()
-        let callbacks = finishCallbacks
-        finishCallbacks.removeAll()
-        finishLock.unlock()
-
         DispatchQueue.main.async {
             self.isRecording = false
             self.lastFinishedAt = Date()
-            self.lastRecordingError = error?.localizedDescription ?? ""
             self.status = error == nil ? "保存完了" : "保存エラー: \(error!.localizedDescription)"
-            self.refreshHealthState()
-            NotificationCenter.default.post(name: .recordingDidFinish, object: latest)
-            callbacks.forEach { $0(latest) }
+            NotificationCenter.default.post(name: .recordingDidFinish, object: nil)
         }
         guard error == nil else { return }
         Task { await verifyRecording(at: outputFileURL) }
