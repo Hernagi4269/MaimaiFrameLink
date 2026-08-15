@@ -16,17 +16,14 @@ struct ViewerHomeView: View {
 
             Group {
                 if landscape {
-                    HStack(spacing: 10) {
-                        VStack(spacing: 8) {
-                            header
-                            playerArea
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-
-                        compactControls
-                            .frame(width: min(330, geometry.size.width * 0.36))
+                    VStack(spacing: 5) {
+                        header
+                        playerArea
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        landscapeControls
                     }
-                    .padding(10)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 6)
                 } else {
                     VStack(spacing: 8) {
                         header
@@ -107,6 +104,80 @@ struct ViewerHomeView: View {
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
+        }
+    }
+
+    private var landscapeControls: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                Text(time(vm.currentSeconds))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 54, alignment: .leading)
+                Slider(
+                    value: Binding(
+                        get: { dragging ? sliderValue : vm.currentSeconds },
+                        set: { sliderValue = $0 }
+                    ),
+                    in: 0...max(0.01, vm.durationSeconds),
+                    onEditingChanged: { editing in
+                        dragging = editing
+                        if !editing { vm.seek(seconds: sliderValue) }
+                    }
+                )
+                Text(time(vm.durationSeconds))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 54, alignment: .trailing)
+            }
+
+            HStack(spacing: 7) {
+                Button { vm.goOlder() } label: { Image(systemName: "backward.end.fill") }
+                    .buttonStyle(.bordered)
+                    .disabled(!vm.canGoOlder || vm.isBusy)
+                    .accessibilityLabel("前の動画")
+
+                frameButton("−10F") { vm.step(-10) }
+                frameButton("−1F") { vm.step(-1) }
+
+                Button(action: vm.togglePlay) {
+                    Image(systemName: vm.isPlaying ? "pause.fill" : "play.fill")
+                        .frame(width: 42, height: 30)
+                }
+                .buttonStyle(.borderedProminent)
+
+                frameButton("+1F") { vm.step(1) }
+                frameButton("+10F") { vm.step(10) }
+
+                Button { vm.goNewer() } label: { Image(systemName: "forward.end.fill") }
+                    .buttonStyle(.bordered)
+                    .disabled(!vm.canGoNewer || vm.isBusy)
+                    .accessibilityLabel("次の動画")
+
+                Spacer(minLength: 6)
+
+                Button {
+                    Task { await vm.setRemoteRecording(!vm.isRemoteRecording) }
+                } label: {
+                    Label(vm.isRemoteRecording ? "停止" : "録画", systemImage: vm.isRemoteRecording ? "stop.fill" : "record.circle")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(vm.isRemoteRecording ? .red : nil)
+                .disabled(discovery.baseURL == nil || vm.isBusy)
+
+                Menu {
+                    Button { showTrimEditor = true } label: { Label("切り抜き", systemImage: "scissors") }
+                    Button { Task { await vm.saveCurrentToPhotos() } } label: { Label("写真に保存", systemImage: "square.and.arrow.down") }
+                    Button(role: .destructive) { showDeleteConfirmation = true } label: { Label("削除", systemImage: "trash") }
+                    Divider()
+                    Button { discovery.forgetPreferredCamera() } label: { Label("接続先を再選択", systemImage: "arrow.triangle.2.circlepath") }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                }
+                .buttonStyle(.bordered)
+                .disabled(vm.isBusy)
+            }
+
+            if vm.isBusy { ProgressView().controlSize(.small) }
         }
     }
 

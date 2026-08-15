@@ -68,6 +68,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     @Published private(set) var healthWarning = ""
     @Published private(set) var lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
     @Published private(set) var freeSpaceLabel = ""
+    @Published private(set) var systemPressureLabel = "正常"
 
     let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
@@ -77,6 +78,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     private var observerTokens: [NSObjectProtocol] = []
     private let finishLock = NSLock()
     private var finishCallbacks: [(VideoInfo?) -> Void] = []
+    private var pressureTimer: DispatchSourceTimer?
 
     override init() {
         super.init()
@@ -86,6 +88,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
     }
 
     deinit {
+        pressureTimer?.cancel()
         for token in observerTokens { NotificationCenter.default.removeObserver(token) }
     }
 
@@ -105,12 +108,14 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         observerTokens.append(center.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.refreshHealthState()
-            if !self.isRecording { self.status = self.is60FPS ? "撮影可能" : self.status }
+            self.recoverCaptureSession(reason: "中断復帰")
         })
         observerTokens.append(center.addObserver(forName: .AVCaptureSessionRuntimeError, object: session, queue: .main) { [weak self] note in
             guard let self else { return }
-            let message = (note.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.localizedDescription ?? "不明なエラー"
-            self.healthWarning = "カメラエラー: \(message)"
+            let nsError = note.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            let message = nsError?.localizedDescription ?? "不明なエラー"
+            self.healthWarning = "カメラエラー: \(message)・自動復旧を試行します"
+            self.recoverCaptureSession(reason: message)
         })
         observerTokens.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
@@ -189,6 +194,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         let configuredFor60FPS = configureStable1080p60(camera)
         videoDevice = camera
         videoInput = cameraInput
+        cameraInput.videoMinFrameDurationOverride = CMTime(value: 1, timescale: 60)
         session.addInput(cameraInput)
 
         if includeAudio,
@@ -203,7 +209,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             return
         }
         session.addOutput(movieOutput)
-        movieOutput.movieFragmentInterval = .invalid
+        movieOutput.movieFragmentInterval = CMTime(seconds: 5, preferredTimescale: 600)
 
         configureMovieOutput()
 
@@ -220,6 +226,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             self.status = self.is60FPS ? "撮影可能" : "60fpsを確認できません"
             self.updateExposureRange(camera)
         }
+        startSystemPressureMonitor(camera)
     }
 
     private func configureMovieOutput() {
@@ -230,7 +237,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
                     AVVideoCodecKey: AVVideoCodecType.h264,
                     AVVideoCompressionPropertiesKey: [
                         AVVideoExpectedSourceFrameRateKey: 60,
-                        AVVideoAverageBitRateKey: 20_000_000,
+                        AVVideoAverageBitRateKey: 16_000_000,
                         AVVideoMaxKeyFrameIntervalKey: 60
                     ]
                 ], for: connection)
@@ -411,6 +418,7 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             self.session.addInput(newInput)
             self.videoInput = newInput
             self.videoDevice = newDevice
+            newInput.videoMinFrameDurationOverride = CMTime(value: 1, timescale: 60)
             self.configureMovieOutput()
             self.session.commitConfiguration()
             self.applyRotationToMovieOutput()
@@ -483,7 +491,21 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
 
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection], error: Error?) {
-        let latest = error == nil ? VideoStore.shared.latest() : nil
+        let finishedSuccessfully: Bool
+        if let nsError = error as NSError? {
+            finishedSuccessfully = (nsError.userInfo[AVErrorRecordingSuccessfullyFinishedKey] as? Bool) ?? false
+        } else {
+            finishedSuccessfully = true
+        }
+
+        let latest: VideoInfo?
+        if finishedSuccessfully {
+            latest = VideoStore.shared.finalizeRecording(at: outputFileURL)
+        } else {
+            VideoStore.shared.discardInProgress(at: outputFileURL)
+            latest = nil
+        }
+
         finishLock.lock()
         let callbacks = finishCallbacks
         finishCallbacks.removeAll()
@@ -492,13 +514,72 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
         DispatchQueue.main.async {
             self.isRecording = false
             self.lastFinishedAt = Date()
-            self.status = error == nil ? "保存完了" : "保存エラー: \(error!.localizedDescription)"
+            if finishedSuccessfully, latest != nil {
+                self.status = "保存完了"
+            } else {
+                self.status = "保存エラー: \(error?.localizedDescription ?? "動画確定に失敗")"
+            }
             self.refreshHealthState()
             NotificationCenter.default.post(name: .recordingDidFinish, object: latest)
             callbacks.forEach { $0(latest) }
         }
-        guard error == nil else { return }
-        Task { await verifyRecording(at: outputFileURL) }
+
+        if let latest, let finalURL = VideoStore.shared.url(for: latest.fileName) {
+            Task { await verifyRecording(at: finalURL) }
+        }
+    }
+
+    private func recoverCaptureSession(reason: String) {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.session.isRunning {
+                self.session.startRunning()
+            }
+            DispatchQueue.main.async {
+                if self.session.isRunning {
+                    self.healthWarning = ""
+                    self.status = self.isRecording ? "録画中" : (self.is60FPS ? "撮影可能" : self.status)
+                } else {
+                    self.healthWarning = "カメラ自動復旧に失敗しました: \(reason)"
+                }
+            }
+        }
+    }
+
+    private func startSystemPressureMonitor(_ camera: AVCaptureDevice) {
+        pressureTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: sessionQueue)
+        timer.schedule(deadline: .now() + 1, repeating: 2)
+        timer.setEventHandler { [weak self, weak camera] in
+            guard let self, let camera else { return }
+            let level = camera.systemPressureState.level
+            let label: String
+            let warning: String?
+            let shouldStopRecording: Bool
+            switch level {
+            case .nominal:
+                label = "正常"; warning = nil; shouldStopRecording = false
+            case .fair:
+                label = "やや高い"; warning = nil; shouldStopRecording = false
+            case .serious:
+                label = "高い"; warning = "カメラ負荷が高くなっています。発熱に注意してください"; shouldStopRecording = false
+            case .critical:
+                label = "非常に高い"; warning = "カメラ負荷が限界です。動画保護のため録画を停止します"; shouldStopRecording = true
+            case .shutdown:
+                label = "停止レベル"; warning = "カメラがシステム負荷で停止しました"; shouldStopRecording = true
+            @unknown default:
+                label = "不明"; warning = nil; shouldStopRecording = false
+            }
+            DispatchQueue.main.async {
+                self.systemPressureLabel = label
+                if let warning { self.healthWarning = warning }
+            }
+            if shouldStopRecording, self.movieOutput.isRecording {
+                self.movieOutput.stopRecording()
+            }
+        }
+        pressureTimer = timer
+        timer.resume()
     }
 
     private func verifyRecording(at url: URL) async {

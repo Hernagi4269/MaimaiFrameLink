@@ -44,7 +44,7 @@ final class LocalVideoServer: ObservableObject {
             parameters.includePeerToPeer = true
 
             let newListener = try NWListener(using: parameters, on: .any)
-            newListener.service = NWListener.Service(name: "MaimaiCamera", type: "_maimailens._tcp")
+            newListener.service = NWListener.Service(name: AppIdentity.serviceName, type: "_maimailens._tcp")
             newListener.stateUpdateHandler = { [weak self, weak newListener] state in
                 guard let self else { return }
                 switch state {
@@ -138,6 +138,20 @@ final class LocalVideoServer: ObservableObject {
         guard parts.count >= 2 else { sendText(connection, code: 400, text: "Bad Request"); return }
         let method = String(parts[0])
         let path = String(parts[1]).removingPercentEncoding ?? String(parts[1])
+
+        if path == "/api/health" {
+            let recording = recordingStateHandler?() ?? false
+            let object: [String: Any] = [
+                "ok": true,
+                "protocolVersion": 2,
+                "cameraID": AppIdentity.cameraID,
+                "serviceName": AppIdentity.serviceName,
+                "recording": recording
+            ]
+            let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{\"ok\":true}".utf8)
+            sendJSON(connection, code: 200, data: data)
+            return
+        }
 
         if path == "/api/latest" {
             guard let latest = VideoStore.shared.latest(),

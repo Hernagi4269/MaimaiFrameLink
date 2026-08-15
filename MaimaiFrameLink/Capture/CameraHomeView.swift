@@ -15,7 +15,7 @@ struct CameraHomeView: View {
     @AppStorage("captureOrientation") private var storedOrientation = ManualCaptureOrientation.portrait.rawValue
     @AppStorage("dimScreenWhileRecording") private var dimScreenWhileRecording = true
     @State private var showSettings = false
-    @State private var brightnessBeforeRecording: CGFloat?
+    @State private var showPreviewWhileRecording = false
     @Environment(\.scenePhase) private var scenePhase
     let onChangeRole: () -> Void
 
@@ -35,12 +35,25 @@ struct CameraHomeView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                CameraPreview(
-                    session: recorder.session,
-                    orientation: selectedOrientation,
-                    onTapFocus: recorder.focus(at:)
-                )
-                .ignoresSafeArea()
+                if recorder.isRecording && dimScreenWhileRecording && !showPreviewWhileRecording {
+                    Color.black.ignoresSafeArea()
+                    VStack(spacing: 8) {
+                        Image(systemName: "moon.zzz.fill")
+                            .font(.title2)
+                        Text("省電力撮影中")
+                            .font(.headline)
+                        Button("プレビューを一時表示") { showPreviewWhileRecording = true }
+                            .buttonStyle(.bordered)
+                    }
+                    .foregroundStyle(.secondary)
+                } else {
+                    CameraPreview(
+                        session: recorder.session,
+                        orientation: selectedOrientation,
+                        onTapFocus: recorder.focus(at:)
+                    )
+                    .ignoresSafeArea()
+                }
 
                 if landscape {
                     landscapeCameraChrome
@@ -72,10 +85,13 @@ struct CameraHomeView: View {
             }
         }
         .onChange(of: recorder.isRecording) { _, recording in
-            applyRecordingBrightness(recording)
+            if recording {
+                showPreviewWhileRecording = false
+            } else {
+                showPreviewWhileRecording = false
+            }
         }
         .onDisappear {
-            restoreBrightness()
             UIApplication.shared.isIdleTimerDisabled = false
             server.stop()
         }
@@ -293,8 +309,13 @@ struct CameraHomeView: View {
                         Spacer()
                         Text(recorder.freeSpaceLabel).foregroundStyle(.secondary)
                     }
-                    Toggle("録画中に画面を暗くする", isOn: $dimScreenWhileRecording)
-                    Text("録画中のみ画面輝度を下げ、停止時に元へ戻します。1080p/60fpsの録画品質には影響しません。")
+                    HStack {
+                        Label("カメラ負荷", systemImage: "thermometer.medium")
+                        Spacer()
+                        Text(recorder.systemPressureLabel).foregroundStyle(.secondary)
+                    }
+                    Toggle("録画中は省電力表示にする", isOn: $dimScreenWhileRecording)
+                    Text("録画中はカメラプレビュー描画を止めて黒い省電力画面にします。録画処理と1080p/60fpsの品質には影響しません。必要な時だけ一時的にプレビューを表示できます。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if !recorder.healthWarning.isEmpty {
@@ -308,6 +329,7 @@ struct CameraHomeView: View {
 
                 Section {
                     Button("役割を変更", action: onChangeRole)
+                        .disabled(recorder.isRecording)
                 }
             }
             .navigationTitle("撮影設定")
@@ -316,22 +338,6 @@ struct CameraHomeView: View {
                     Button("完了") { showSettings = false }
                 }
             }
-        }
-    }
-
-    private func applyRecordingBrightness(_ recording: Bool) {
-        if recording, dimScreenWhileRecording {
-            if brightnessBeforeRecording == nil { brightnessBeforeRecording = UIScreen.main.brightness }
-            UIScreen.main.brightness = min(UIScreen.main.brightness, 0.12)
-        } else {
-            restoreBrightness()
-        }
-    }
-
-    private func restoreBrightness() {
-        if let value = brightnessBeforeRecording {
-            UIScreen.main.brightness = value
-            brightnessBeforeRecording = nil
         }
     }
 

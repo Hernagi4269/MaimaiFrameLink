@@ -4,7 +4,16 @@ struct RootView: View {
     @AppStorage("deviceRole") private var deviceRole = ""
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if let days = ProvisioningInfo.daysRemaining, days <= 2 {
+                Text(days < 0 ? "署名期限が切れています。Sideloadlyで再署名してください" : "署名期限まであと \(max(0, days + 1)) 日です")
+                    .font(.caption.bold())
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .background(Color.yellow)
+            }
+            Group {
             if deviceRole == "camera" {
                 CameraHomeView(onChangeRole: { deviceRole = "" })
             } else if deviceRole == "viewer" {
@@ -12,6 +21,8 @@ struct RootView: View {
             } else {
                 rolePicker
             }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
     }
