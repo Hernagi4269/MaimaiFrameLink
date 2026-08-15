@@ -564,9 +564,9 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
             case .serious:
                 label = "高い"; warning = "カメラ負荷が高くなっています。発熱に注意してください"; shouldStopRecording = false
             case .critical:
-                label = "非常に高い"; warning = "カメラ負荷が限界です。動画保護のため録画を停止します"; shouldStopRecording = true
+                label = "非常に高い"; warning = "カメラ負荷が非常に高くなっています。端末を冷ましてください"; shouldStopRecording = false
             case .shutdown:
-                label = "停止レベル"; warning = "カメラがシステム負荷で停止しました"; shouldStopRecording = true
+                label = "停止レベル"; warning = "カメラがシステム負荷で停止する可能性があります"; shouldStopRecording = false
             default:
                 label = "不明"; warning = nil; shouldStopRecording = false
             }
@@ -574,9 +574,9 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
                 self.systemPressureLabel = label
                 if let warning { self.healthWarning = warning }
             }
-            if shouldStopRecording, self.movieOutput.isRecording {
-                self.movieOutput.stopRecording()
-            }
+            // Never stop a maimai recording proactively because of pressure alone.
+            // AVCaptureSession interruption/runtime-error handling remains responsible for
+            // genuine camera shutdowns. A warning is safer than creating a sub-second clip.
         }
         pressureTimer = timer
         timer.resume()

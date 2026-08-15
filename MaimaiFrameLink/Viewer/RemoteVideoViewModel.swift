@@ -270,27 +270,37 @@ final class RemoteVideoViewModel: ObservableObject {
         guard let baseURL, !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
+
         let path = shouldRecord ? "api/record/start" : "api/record/stop"
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
-        // Stop waits for AVCaptureMovieFileOutput to finish writing the file.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = shouldRecord ? 10 : 30
+
         do {
-            let (statusCode, data) = try await sendControlRequest(method: "POST", path: "/\(path)", timeout: shouldRecord ? 10 : 30)
-            guard statusCode == 200 else {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 status = "録画操作に失敗しました"
                 await fetchRecordingState()
                 return
             }
 
-            isRemoteRecording = shouldRecord
             if shouldRecord {
-                status = "撮影側で録画開始"
+                // Do not optimistically trust the POST response. Give AVCaptureMovieFileOutput
+                // a moment to enter recording state, then ask the camera for the real state.
+                try? await Task.sleep(for: .milliseconds(350))
+                await fetchRecordingState()
+                if isRemoteRecording {
+                    status = "撮影側で録画中"
+                } else {
+                    status = "録画開始を確認できませんでした"
+                }
                 return
             }
 
-            // The camera side responds only after the new MP4 is fully finalized.
-            // Load that exact file immediately instead of waiting for list polling.
+            isRemoteRecording = false
+
+            // The camera responds only after AVCaptureMovieFileOutput has finalized the MP4.
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
             if let stop = try? decoder.decode(RecordingStopResponse.self, from: data),
                let latest = stop.latest {
@@ -324,112 +334,18 @@ final class RemoteVideoViewModel: ObservableObject {
     }
 
     func fetchRecordingState() async {
-        guard baseURL != nil else { return }
+        guard let baseURL else { return }
         do {
-            let (statusCode, data) = try await sendControlRequest(method: "GET", path: "/api/record/status", timeout: 10)
-            guard statusCode == 200,
+            var request = URLRequest(url: baseURL.appendingPathComponent("api/record/status"))
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 10
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let recording = object["recording"] as? Bool else { return }
             isRemoteRecording = recording
-        } catch { }
-    }
-
-    /// Control commands deliberately use Network.framework directly with
-    /// includePeerToPeer enabled. Video listing/streaming keeps the simpler
-    /// Bonjour-resolved HTTP URL that proved reliable on the two test iPhones.
-    private func sendControlRequest(method: String, path: String, timeout: TimeInterval) async throws -> (Int, Data) {
-        guard let controlHost,
-              let controlPort,
-              controlPort > 0, controlPort <= Int(UInt16.max),
-              let port = NWEndpoint.Port(rawValue: UInt16(controlPort)) else {
-            throw URLError(.cannotFindHost)
-        }
-
-        let parameters = NWParameters.tcp
-        parameters.includePeerToPeer = true
-        let connection = NWConnection(host: NWEndpoint.Host(controlHost), port: port, using: parameters)
-
-        return try await withCheckedThrowingContinuation { continuation in
-            let lock = NSLock()
-            var finished = false
-            var buffer = Data()
-
-            func finish(_ result: Result<(Int, Data), Error>) {
-                lock.lock()
-                guard !finished else { lock.unlock(); return }
-                finished = true
-                lock.unlock()
-                connection.stateUpdateHandler = nil
-                connection.cancel()
-                continuation.resume(with: result)
-            }
-
-            let timeoutWork = DispatchWorkItem {
-                finish(.failure(URLError(.timedOut)))
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
-
-            func receiveMore() {
-                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
-                    if let error {
-                        timeoutWork.cancel()
-                        finish(.failure(error))
-                        return
-                    }
-                    if let data { buffer.append(data) }
-
-                    if let headerRange = buffer.range(of: Data("\r\n\r\n".utf8)) {
-                        let headerData = buffer[..<headerRange.lowerBound]
-                        let headerText = String(data: headerData, encoding: .utf8) ?? ""
-                        let lines = headerText.components(separatedBy: "\r\n")
-                        let statusCode = lines.first?
-                            .split(separator: " ")
-                            .dropFirst()
-                            .first
-                            .flatMap { Int($0) } ?? 0
-                        let contentLength = lines.first { $0.lowercased().hasPrefix("content-length:") }
-                            .flatMap { Int($0.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespaces) ?? "") }
-                        let bodyStart = headerRange.upperBound
-                        let bodyCount = buffer.distance(from: bodyStart, to: buffer.endIndex)
-                        if contentLength == nil || bodyCount >= contentLength! || isComplete {
-                            timeoutWork.cancel()
-                            let body = Data(buffer[bodyStart...])
-                            finish(.success((statusCode, body)))
-                            return
-                        }
-                    }
-
-                    if isComplete {
-                        timeoutWork.cancel()
-                        finish(.failure(URLError(.badServerResponse)))
-                    } else {
-                        receiveMore()
-                    }
-                }
-            }
-
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    let request = "\(method) \(path) HTTP/1.1\r\nHost: \(controlHost)\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
-                    connection.send(content: Data(request.utf8), completion: .contentProcessed { error in
-                        if let error {
-                            timeoutWork.cancel()
-                            finish(.failure(error))
-                        } else {
-                            receiveMore()
-                        }
-                    })
-                case .failed(let error):
-                    timeoutWork.cancel()
-                    finish(.failure(error))
-                case .cancelled:
-                    break
-                default:
-                    break
-                }
-            }
-            connection.start(queue: DispatchQueue.global(qos: .userInitiated))
+        } catch {
+            // Do not destroy the working video connection just because a state poll failed.
         }
     }
 
