@@ -166,6 +166,12 @@ struct CameraHomeView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            if !recorder.lastRecordingError.isEmpty && !recorder.isRecording {
+                Text(recorder.lastRecordingError)
+                    .font(.caption2.bold())
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
             if !recorder.healthWarning.isEmpty {
                 Text(recorder.healthWarning)
                     .font(.caption2.bold())

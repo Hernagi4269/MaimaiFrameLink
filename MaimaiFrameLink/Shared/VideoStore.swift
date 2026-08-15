@@ -47,14 +47,15 @@ final class VideoStore {
         cleanupStaleInProgressFiles()
     }
 
-    /// Creates a unique recording destination that is intentionally outside the
-    /// public recording list. The file only becomes visible after finalizeRecording.
+    /// Creates the recording destination directly in Recordings. This restores the
+    /// simple file path used by the recording core that proved stable on-device.
+    /// Unique millisecond + UUID naming prevents collisions during rapid restarts.
     func newRecordingURL() -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd_HHmmss_SSS"
         let suffix = UUID().uuidString.prefix(8)
-        return inProgressURL.appendingPathComponent("maimai_\(formatter.string(from: Date()))_\(suffix).mp4")
+        return folderURL.appendingPathComponent("maimai_\(formatter.string(from: Date()))_\(suffix).mp4")
     }
 
     /// Moves a fully-finalized movie into the public recording directory.
@@ -62,6 +63,13 @@ final class VideoStore {
     /// is still writing its movie header/trailer.
     func finalizeRecording(at temporaryURL: URL) -> VideoInfo? {
         guard fm.fileExists(atPath: temporaryURL.path) else { return nil }
+
+        // The reliability-first recording core now records directly into Recordings.
+        // In that case there is nothing to move; simply publish its metadata.
+        if temporaryURL.deletingLastPathComponent().standardizedFileURL == folderURL.standardizedFileURL {
+            return info(for: temporaryURL)
+        }
+
         let destination = folderURL.appendingPathComponent(temporaryURL.lastPathComponent)
         do {
             if fm.fileExists(atPath: destination.path) {

@@ -238,7 +238,12 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
                 // bitrate appropriate for the active high-frame-rate capture format.
                 // Forcing encoder tuning here made recording less portable across iPhones.
                 movieOutput.setOutputSettings([
-                    AVVideoCodecKey: AVVideoCodecType.h264
+                    AVVideoCodecKey: AVVideoCodecType.h264,
+                    AVVideoCompressionPropertiesKey: [
+                        AVVideoExpectedSourceFrameRateKey: 60,
+                        AVVideoAverageBitRateKey: 20_000_000,
+                        AVVideoMaxKeyFrameIntervalKey: 60
+                    ]
                 ], for: connection)
             }
         }
@@ -449,66 +454,58 @@ final class CameraRecorder: NSObject, ObservableObject, AVCaptureFileOutputRecor
 
     @discardableResult
     func startRecording() -> Bool {
-        guard !isRecording, !movieOutput.isRecording else { return false }
-        refreshHealthState()
+        // Reliability-first recording core: this intentionally mirrors the
+        // early on-device shutter path that was proven to record correctly.
+        // Remote recording calls this exact same method on the main thread.
+        guard session.isRunning else {
+            lastRecordingError = "Capture Sessionが停止しています"
+            status = "録画開始不可・カメラ未起動"
+            return false
+        }
+        guard !movieOutput.isRecording, !isRecording else {
+            return false
+        }
 
+        refreshHealthState()
         if let bytes = VideoStore.shared.availableCapacityBytes(), bytes < 500_000_000 {
             lastRecordingError = "空き容量不足"
             status = "空き容量不足で録画できません"
             return false
         }
 
-        // Keep remote recording on the exact same path as the on-device shutter.
-        // The capture session is normally kept running while CameraHomeView is active.
-        // If iOS interrupted it temporarily, restore it before starting the movie output.
-        if !session.isRunning {
-            session.startRunning()
-        }
-        guard session.isRunning else {
-            lastRecordingError = "Capture Sessionを開始できません"
-            status = "録画開始に失敗しました"
-            return false
-        }
-
         applyRotationToMovieOutput()
         configureRecordingAudioSession()
         let url = VideoStore.shared.newRecordingURL()
-        movieOutput.startRecording(to: url, recordingDelegate: self)
-
-        // This mirrors the on-device shutter behavior that proved stable before the
-        // remote-record handshake was added. AVFoundation remains the source of truth
-        // for finalization in didFinishRecording.
-        isRecording = true
         lastRecordingError = ""
+
+        movieOutput.startRecording(to: url, recordingDelegate: self)
+        isRecording = true
         status = "録画中"
         return true
     }
 
     func stopRecording() {
-        sessionQueue.async { [weak self] in
-            guard let self, self.movieOutput.isRecording else { return }
-            self.movieOutput.stopRecording()
+        guard movieOutput.isRecording else {
+            if isRecording {
+                isRecording = false
+                status = "録画は開始されていません"
+            }
+            return
         }
+        movieOutput.stopRecording()
     }
 
     func stopRecording(completion: @escaping (VideoInfo?) -> Void) {
+        guard movieOutput.isRecording else {
+            isRecording = false
+            completion(VideoStore.shared.latest())
+            return
+        }
+
         finishLock.lock()
         finishCallbacks.append(completion)
         finishLock.unlock()
-
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            guard self.movieOutput.isRecording else {
-                self.finishLock.lock()
-                let callbacks = self.finishCallbacks
-                self.finishCallbacks.removeAll()
-                self.finishLock.unlock()
-                let latest = VideoStore.shared.latest()
-                DispatchQueue.main.async { callbacks.forEach { $0(latest) } }
-                return
-            }
-            self.movieOutput.stopRecording()
-        }
+        movieOutput.stopRecording()
     }
 
     private func applyRotationToMovieOutput() {
