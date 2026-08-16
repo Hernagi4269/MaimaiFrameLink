@@ -7,7 +7,7 @@ import Darwin
 /// not immediately tear the connection down. This keeps an already-working LAN /
 /// Personal Hotspot connection alive instead of repeatedly rebuilding it.
 @MainActor
-final class CameraDiscovery: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
+final class CameraDiscovery: NSObject, ObservableObject, @preconcurrency NetServiceBrowserDelegate, @preconcurrency NetServiceDelegate {
     @Published private(set) var baseURL: URL?
     @Published private(set) var status = "撮影側を検索中…"
     @Published private(set) var connectedServiceName: String?

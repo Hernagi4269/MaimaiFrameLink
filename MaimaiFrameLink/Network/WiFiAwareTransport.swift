@@ -376,7 +376,7 @@ private enum WiFiAwareByteTunnel {
     }
 
     private static func sendNW(_ connection: NWConnection, data: Data) async throws {
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) }
                 else { continuation.resume() }
@@ -419,7 +419,7 @@ private final class WiFiAwareLoopbackProxy {
     }
 }
 
-private final class LocalCameraServerResolver: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
+private final class LocalCameraServerResolver: NSObject, @unchecked Sendable, @preconcurrency NetServiceBrowserDelegate, @preconcurrency NetServiceDelegate {
     private var browser: NetServiceBrowser?
     private var continuation: CheckedContinuation<UInt16, Error>?
     private var timer: Timer?
