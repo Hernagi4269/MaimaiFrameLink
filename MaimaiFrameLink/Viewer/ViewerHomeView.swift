@@ -3,6 +3,7 @@ import SwiftUI
 struct ViewerHomeView: View {
     @StateObject private var discovery = CameraDiscovery()
     @StateObject private var vm = RemoteVideoViewModel()
+    @ObservedObject private var aware = WiFiAwareTransport.shared
     @State private var showDeleteConfirmation = false
     @State private var showTrimEditor = false
     @State private var showFullscreenViewer = false
@@ -33,7 +34,15 @@ struct ViewerHomeView: View {
             vm.connect(baseURL: nil, controlHost: nil, controlPort: nil)
         }
         .onChange(of: discovery.baseURL) { _, newValue in
+            guard aware.viewerBaseURL == nil else { return }
             vm.connect(baseURL: newValue, controlHost: discovery.controlHost, controlPort: discovery.controlPort)
+        }
+        .onChange(of: aware.viewerBaseURL) { _, newValue in
+            if let newValue {
+                vm.connect(baseURL: newValue, controlHost: nil, controlPort: nil)
+            } else {
+                vm.connect(baseURL: discovery.baseURL, controlHost: discovery.controlHost, controlPort: discovery.controlPort)
+            }
         }
         .confirmationDialog("この動画を撮影側iPhoneから削除しますか？", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
             Button("削除", role: .destructive) { Task { await vm.deleteCurrent() } }
@@ -50,7 +59,7 @@ struct ViewerHomeView: View {
     private var header: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(discovery.status).font(.headline).lineLimit(1)
+                Text(aware.viewerBaseURL != nil ? aware.status : discovery.status).font(.headline).lineLimit(1)
                 HStack(spacing: 6) {
                     if vm.isBuffering { ProgressView().controlSize(.mini) }
                     Text(vm.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -154,7 +163,7 @@ struct ViewerHomeView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(vm.isRemoteRecording ? .red : nil)
-                .disabled(discovery.baseURL == nil || vm.isBusy)
+                .disabled((aware.viewerBaseURL ?? discovery.baseURL) == nil || vm.isBusy)
 
                 Button {
                     vm.goOlder()

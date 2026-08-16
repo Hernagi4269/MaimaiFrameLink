@@ -63,3 +63,11 @@ v0.8.0 安定化
 - 動画一覧ポーリングの多重実行を防止し、3秒→4秒へ緩和。
 - ヘッダーの再読込は通信経路を壊さず動画一覧だけ更新。通信再接続はメニューから明示実行する方式へ分離。
 - 通信失敗時も現在再生中の動画や発見済み接続を即破棄しない。
+
+[0.9.4 Wi-Fi Aware]
+- iOS 26 / iPhone 12以降で利用できるWi-Fi Aware直接通信を追加。
+- 既存のBonjour / Wi-Fi / テザリング経路は残しており、Wi-Fi Awareが使えない場合は従来経路へフォールバックする。
+- 初回のみ撮影側・確認側の両方で「ペアリング」を押し、AppleのシステムUIでペアリングする。
+- Wi-Fi AwareはPublish/Subscribe entitlementが必要。無料Apple Account + Sideloadlyでこのentitlementを付与できるかはAppleが明示保証していないため、GitHub Actionsでは従来版とWi-Fi Aware版を別Artifactとして生成する。
+- まず MaimaiFrameLink-WiFiAware ArtifactをSideloadlyで署名・インストールして試す。署名/インストール時にentitlementエラーが出る場合は従来版 MaimaiFrameLink を使用できる。
+- Wi-Fi Awareはbulkモード + bestEffortを使用し、動画確認用途での電力消費を抑える。低遅延realtimeモードは現時点では使用しない。

@@ -23,6 +23,9 @@ struct RootView: View {
                     .padding(.vertical, 5)
                     .background(Color.red)
             }
+            if !deviceRole.isEmpty {
+                WiFiAwareRoleBar(role: deviceRole)
+            }
             Group {
                 if deviceRole == "camera" {
                     CameraHomeView(onChangeRole: { deviceRole = "" })
@@ -35,9 +38,18 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
-        .onAppear { updateIdleTimer() }
-        .onChange(of: deviceRole) { _, _ in updateIdleTimer() }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .onAppear {
+            updateIdleTimer()
+            WiFiAwareTransport.shared.start(role: deviceRole)
+        }
+        .onChange(of: deviceRole) { _, newRole in
+            updateIdleTimer()
+            WiFiAwareTransport.shared.start(role: newRole)
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            WiFiAwareTransport.shared.stop()
+        }
     }
 
     private func updateIdleTimer() {
