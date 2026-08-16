@@ -58,7 +58,7 @@ struct ViewerHomeView: View {
             }
             Spacer(minLength: 4)
             Button {
-                discovery.forceReconnect(); vm.reloadConnection()
+                vm.reloadConnection()
             } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("再読込")
@@ -169,7 +169,8 @@ struct ViewerHomeView: View {
                     Button { Task { await vm.saveCurrentToPhotos() } } label: { Label("写真に保存", systemImage: "square.and.arrow.down") }
                     Button(role: .destructive) { showDeleteConfirmation = true } label: { Label("削除", systemImage: "trash") }
                     Divider()
-                    Button { discovery.forceReconnect(); vm.reloadConnection() } label: { Label("再接続・再読込", systemImage: "arrow.clockwise") }
+                    Button { vm.reloadConnection() } label: { Label("動画を再読込", systemImage: "arrow.clockwise") }
+                    Button { discovery.forceReconnect() } label: { Label("通信を再接続", systemImage: "antenna.radiowaves.left.and.right") }
                 } label: { Image(systemName: "ellipsis.circle").font(.title3) }
                 .buttonStyle(.bordered)
                 .disabled(vm.isBusy)

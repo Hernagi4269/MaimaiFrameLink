@@ -36,6 +36,16 @@ final class RemoteVideoViewModel: ObservableObject {
     private var loadGeneration = UUID()
     private var timeControlObservation: NSKeyValueObservation?
     private var stalledObserver: NSObjectProtocol?
+    private var isListRequestInFlight = false
+
+    private lazy var networkSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 8
+        configuration.timeoutIntervalForResource = 20
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
 
     init() {
         configurePlaybackAudio()
@@ -109,23 +119,25 @@ final class RemoteVideoViewModel: ObservableObject {
         }
         refreshList(forceNewest: true)
         Task { await fetchRecordingState() }
-        timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshList(forceNewest: false) }
         }
     }
 
     func refreshList(forceNewest: Bool = false) {
-        guard let baseURL else { return }
+        guard let baseURL, !isListRequestInFlight else { return }
+        isListRequestInFlight = true
         let url = baseURL.appendingPathComponent("api/list")
         let previouslySelectedID = current?.id
         let wasOnNewest = selectedIndex == 0
 
         Task {
+            defer { isListRequestInFlight = false }
             do {
                 var request = URLRequest(url: url)
                 request.cachePolicy = .reloadIgnoringLocalCacheData
-                request.timeoutInterval = 10
-                let (data, response) = try await URLSession.shared.data(for: request)
+                request.timeoutInterval = 8
+                let (data, response) = try await performNetworkRequest(request, attempts: 3)
                 guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                     status = "撮影済み動画なし"
                     return
@@ -157,11 +169,29 @@ final class RemoteVideoViewModel: ObservableObject {
                 }
             } catch {
                 consecutiveConnectionFailures += 1
+                // Keep the currently loaded movie and discovery result alive. A
+                // transient HTTP failure must not tear down a working connection.
                 status = consecutiveConnectionFailures >= 2
-                    ? "P2P通信を再確立中… 再読込も使用できます"
-                    : "撮影側との通信を確立中…"
+                    ? "通信が一時不安定です・自動再試行中"
+                    : "撮影側の応答を再確認中…"
             }
         }
+    }
+
+    private func performNetworkRequest(_ request: URLRequest, attempts: Int) async throws -> (Data, URLResponse) {
+        var lastError: Error?
+        for attempt in 0..<max(1, attempts) {
+            do {
+                return try await networkSession.data(for: request)
+            } catch {
+                lastError = error
+                if attempt + 1 < attempts {
+                    let delay: UInt64 = attempt == 0 ? 300_000_000 : 750_000_000
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+            }
+        }
+        throw lastError ?? URLError(.cannotConnectToHost)
     }
 
     func goOlder() {
@@ -350,7 +380,7 @@ final class RemoteVideoViewModel: ObservableObject {
     func reloadConnection() {
         player.pause()
         isPlaying = false
-        status = "再読み込み中…"
+        status = "動画一覧を再読み込み中…"
         refreshList(forceNewest: true)
         Task { await fetchRecordingState() }
     }
@@ -368,7 +398,7 @@ final class RemoteVideoViewModel: ObservableObject {
         request.timeoutInterval = shouldRecord ? 8 : 20
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await performNetworkRequest(request, attempts: 3)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 status = "録画操作に失敗しました"
                 await fetchRecordingState()
@@ -413,7 +443,7 @@ final class RemoteVideoViewModel: ObservableObject {
             var request = URLRequest(url: baseURL.appendingPathComponent("api/record/status"))
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.timeoutInterval = 4
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await performNetworkRequest(request, attempts: 3)
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let recording = object["recording"] as? Bool else { return nil }
@@ -439,7 +469,7 @@ final class RemoteVideoViewModel: ObservableObject {
                 var request = URLRequest(url: baseURL.appendingPathComponent("api/list"))
                 request.cachePolicy = .reloadIgnoringLocalCacheData
                 request.timeoutInterval = 4
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await performNetworkRequest(request, attempts: 3)
                 if (response as? HTTPURLResponse)?.statusCode == 200 {
                     let newVideos = try decoder.decode([VideoInfo].self, from: data)
                     if let newest = newVideos.first, newest.id != previousNewestID {
@@ -525,7 +555,7 @@ final class RemoteVideoViewModel: ObservableObject {
         status = "切り抜き用動画を取得中…"
         do {
             let remoteURL = baseURL.appendingPathComponent("videos").appendingPathComponent(info.fileName)
-            let (downloadURL, response) = try await URLSession.shared.download(from: remoteURL)
+            let (downloadURL, response) = try await networkSession.download(from: remoteURL)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 || http.statusCode == 206 else {
                 status = "動画取得に失敗"; return
             }
@@ -574,7 +604,7 @@ final class RemoteVideoViewModel: ObservableObject {
             var request = URLRequest(url: url)
             request.httpMethod = "DELETE"
             request.timeoutInterval = 4
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await performNetworkRequest(request, attempts: 3)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 status = "削除に失敗しました"
                 return
@@ -597,7 +627,7 @@ final class RemoteVideoViewModel: ObservableObject {
         var localURL: URL?
 
         do {
-            let (downloadedURL, response) = try await URLSession.shared.download(from: remoteURL)
+            let (downloadedURL, response) = try await networkSession.download(from: remoteURL)
             guard let http = response as? HTTPURLResponse,
                   http.statusCode == 200 || http.statusCode == 206 else {
                 status = "保存用動画の取得に失敗"
