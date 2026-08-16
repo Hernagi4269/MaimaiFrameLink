@@ -24,6 +24,8 @@ final class RemoteVideoViewModel: ObservableObject {
     @Published var trimStartSeconds: Double = 0
     @Published var trimEndSeconds: Double = 0
     @Published var videoFrameRate: Double = 60
+    @Published var activeVideoID: String?
+    @Published var isBuffering = false
 
     private var baseURL: URL?
     private var controlHost: String?
@@ -31,11 +33,16 @@ final class RemoteVideoViewModel: ObservableObject {
     private var timer: Timer?
     private var periodicToken: Any?
     private var consecutiveConnectionFailures = 0
+    private var loadGeneration = UUID()
+    private var timeControlObservation: NSKeyValueObservation?
+    private var stalledObserver: NSObjectProtocol?
 
     init() {
         configurePlaybackAudio()
         player.isMuted = false
         player.volume = 1.0
+        player.automaticallyWaitsToMinimizeStalling = true
+        observePlaybackState()
     }
 
     private func configurePlaybackAudio() {
@@ -90,8 +97,13 @@ final class RemoteVideoViewModel: ObservableObject {
                 periodicToken = nil
             }
             player.pause()
+            player.replaceCurrentItem(with: nil)
             videos = []
             selectedIndex = 0
+            activeVideoID = nil
+            currentSeconds = 0
+            durationSeconds = 0
+            isBuffering = false
             status = "撮影側を検索中…"
             return
         }
@@ -166,23 +178,46 @@ final class RemoteVideoViewModel: ObservableObject {
 
     private func loadCurrent() {
         guard let info = current, let baseURL else { return }
-        player.pause(); isPlaying = false
+
+        // A video switch must be a hard state boundary. Never carry the previous
+        // item's currentTime/duration/scrubber state into the next movie.
+        let generation = UUID()
+        loadGeneration = generation
+        player.pause()
+        isPlaying = false
+        isBuffering = true
+        activeVideoID = info.id
         currentSeconds = 0
         durationSeconds = 0
+        trimStartSeconds = 0
+        trimEndSeconds = 0
+        videoFrameRate = 60
+        videoAspectRatio = 9.0 / 16.0
+        player.replaceCurrentItem(with: nil)
+
         let url = baseURL.appendingPathComponent("videos").appendingPathComponent(info.fileName)
         let item = AVPlayerItem(url: url)
+        item.preferredForwardBufferDuration = 12
         player.replaceCurrentItem(with: item)
         status = "動画を読み込み中"
         addObserver()
+        observeStall(for: item)
+
         Task {
             do {
                 let duration = try await item.asset.load(.duration)
+                guard generation == loadGeneration, activeVideoID == info.id else { return }
                 durationSeconds = max(0, duration.seconds)
                 await updateVideoMetadata(for: item.asset)
+                guard generation == loadGeneration, activeVideoID == info.id else { return }
                 trimStartSeconds = 0
                 trimEndSeconds = durationSeconds
+                currentSeconds = 0
+                isBuffering = false
                 status = "1F送り対応"
             } catch {
+                guard generation == loadGeneration else { return }
+                isBuffering = false
                 status = "動画情報の取得に失敗"
             }
         }
@@ -224,6 +259,46 @@ final class RemoteVideoViewModel: ObservableObject {
         }
     }
 
+    private func observePlaybackState() {
+        timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch player.timeControlStatus {
+                case .waitingToPlayAtSpecifiedRate:
+                    self.isBuffering = self.player.currentItem != nil
+                case .playing:
+                    self.isBuffering = false
+                    self.isPlaying = true
+                case .paused:
+                    self.isBuffering = false
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+
+    private func observeStall(for item: AVPlayerItem) {
+        if let stalledObserver { NotificationCenter.default.removeObserver(stalledObserver) }
+        stalledObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.player.currentItem === item else { return }
+                self.isBuffering = true
+                self.status = "読み込み待ち・自動復旧中"
+                let shouldResume = self.isPlaying
+                let position = self.actualPlaybackSeconds()
+                try? await Task.sleep(for: .milliseconds(250))
+                let target = CMTime(seconds: position, preferredTimescale: 60000)
+                await self.player.seek(to: target, toleranceBefore: CMTime(seconds: 0.08, preferredTimescale: 60000), toleranceAfter: CMTime(seconds: 0.08, preferredTimescale: 60000))
+                if shouldResume { self.player.play() }
+            }
+        }
+    }
+
     func togglePlay() {
         configurePlaybackAudio()
         player.isMuted = false
@@ -253,6 +328,20 @@ final class RemoteVideoViewModel: ObservableObject {
         }
     }
 
+    func skip(seconds delta: Double) {
+        player.pause()
+        isPlaying = false
+        guard player.currentItem != nil else { return }
+        let targetSeconds = min(max(0, actualPlaybackSeconds() + delta), durationSeconds)
+        let target = CMTime(seconds: targetSeconds, preferredTimescale: 60000)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.currentSeconds = self.actualPlaybackSeconds()
+            }
+        }
+    }
+
     func seek(seconds: Double) {
         player.pause(); isPlaying = false
         player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
@@ -271,45 +360,101 @@ final class RemoteVideoViewModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
 
+        let previousNewestID = videos.first?.id
         let path = shouldRecord ? "api/record/start" : "api/record/stop"
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = shouldRecord ? 8 : 30
+        request.timeoutInterval = shouldRecord ? 8 : 20
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let message = object["error"] as? String, !message.isEmpty {
-                    status = "録画操作失敗: \(message)"
-                } else {
-                    status = "録画操作に失敗しました"
-                }
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                status = "録画操作に失敗しました"
                 await fetchRecordingState()
                 return
             }
 
             if shouldRecord {
-                isRemoteRecording = true
-                status = "撮影側で録画中"
+                // The server acknowledges before the main-thread handler necessarily
+                // starts recording. Confirm the camera's real state before claiming success.
+                if await waitForRecordingState(expected: true, attempts: 8) {
+                    isRemoteRecording = true
+                    status = "撮影側で録画中"
+                } else {
+                    isRemoteRecording = false
+                    status = "録画開始を確認できません・撮影側を確認してください"
+                }
                 return
             }
 
-            isRemoteRecording = false
-            let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-            if let stop = try? decoder.decode(RecordingStopResponse.self, from: data),
-               let latest = stop.latest {
-                applyFinishedRecording(latest)
-                status = "録画停止・最新動画を読み込み中"
+            if await waitForRecordingState(expected: false, attempts: 12) {
+                isRemoteRecording = false
+                status = "録画停止・動画の確定待ち"
+                if await waitForNewVideo(previousNewestID: previousNewestID, attempts: 14) {
+                    status = "録画停止・最新動画を読み込み中"
+                } else {
+                    status = "録画停止済み・新しい動画を確認できません"
+                    refreshList(forceNewest: true)
+                }
             } else {
-                status = "録画停止・最新動画を確認中"
-                refreshList(forceNewest: true)
+                status = "録画停止を確認できません・撮影側を確認してください"
+                await fetchRecordingState()
             }
         } catch {
             status = "録画操作に失敗: \(error.localizedDescription)"
             await fetchRecordingState()
         }
+    }
+
+    private func queryRecordingState() async -> Bool? {
+        guard let baseURL else { return nil }
+        do {
+            var request = URLRequest(url: baseURL.appendingPathComponent("api/record/status"))
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 4
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let recording = object["recording"] as? Bool else { return nil }
+            return recording
+        } catch {
+            return nil
+        }
+    }
+
+    private func waitForRecordingState(expected: Bool, attempts: Int) async -> Bool {
+        for _ in 0..<attempts {
+            if let actual = await queryRecordingState(), actual == expected { return true }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return false
+    }
+
+    private func waitForNewVideo(previousNewestID: String?, attempts: Int) async -> Bool {
+        guard let baseURL else { return false }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        for _ in 0..<attempts {
+            do {
+                var request = URLRequest(url: baseURL.appendingPathComponent("api/list"))
+                request.cachePolicy = .reloadIgnoringLocalCacheData
+                request.timeoutInterval = 4
+                let (data, response) = try await URLSession.shared.data(for: request)
+                if (response as? HTTPURLResponse)?.statusCode == 200 {
+                    let newVideos = try decoder.decode([VideoInfo].self, from: data)
+                    if let newest = newVideos.first, newest.id != previousNewestID {
+                        videos = newVideos
+                        selectedIndex = 0
+                        loadCurrent()
+                        return true
+                    }
+                }
+            } catch {
+                // File finalization can briefly race the list request; retry quietly.
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+        return false
     }
 
     func resumeAfterForeground() {
@@ -330,18 +475,8 @@ final class RemoteVideoViewModel: ObservableObject {
     }
 
     func fetchRecordingState() async {
-        guard let baseURL else { return }
-        do {
-            var request = URLRequest(url: baseURL.appendingPathComponent("api/record/status"))
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            request.timeoutInterval = 10
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let recording = object["recording"] as? Bool else { return }
+        if let recording = await queryRecordingState() {
             isRemoteRecording = recording
-        } catch {
-            // Do not destroy the working video connection just because a state poll failed.
         }
     }
 

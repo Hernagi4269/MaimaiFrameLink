@@ -1,7 +1,9 @@
 import SwiftUI
+import UIKit
 
 struct RootView: View {
     @AppStorage("deviceRole") private var deviceRole = ""
+    @AppStorage("MaimaiFrameLink.cameraBackupError") private var cameraBackupError = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,18 +15,35 @@ struct RootView: View {
                     .padding(.vertical, 5)
                     .background(Color.yellow)
             }
-            Group {
-            if deviceRole == "camera" {
-                CameraHomeView(onChangeRole: { deviceRole = "" })
-            } else if deviceRole == "viewer" {
-                ViewerHomeView(onChangeRole: { deviceRole = "" })
-            } else {
-                rolePicker
+            if deviceRole == "camera", !cameraBackupError.isEmpty {
+                Text(cameraBackupError)
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .background(Color.red)
             }
+            Group {
+                if deviceRole == "camera" {
+                    CameraHomeView(onChangeRole: { deviceRole = "" })
+                } else if deviceRole == "viewer" {
+                    ViewerHomeView(onChangeRole: { deviceRole = "" })
+                } else {
+                    rolePicker
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .preferredColorScheme(.dark)
+        .onAppear { updateIdleTimer() }
+        .onChange(of: deviceRole) { _, _ in updateIdleTimer() }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+    }
+
+    private func updateIdleTimer() {
+        // Low Power Mode forces a short Auto-Lock interval, so camera role explicitly
+        // disables the idle timer. Viewer role remains free to lock normally.
+        UIApplication.shared.isIdleTimerDisabled = (deviceRole == "camera")
     }
 
     private var rolePicker: some View {
